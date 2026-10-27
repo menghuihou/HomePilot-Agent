@@ -6,7 +6,7 @@
 **目标：** 把开发一个可上线的智能设备管家 Agent 所需的运行环境、依赖工具、本地服务、配置项、IDE 插件、测试与生产工具整理成一份可执行清单。
 
 > 原则：MVP 阶段保持轻量，优先用 Docker Compose、PostgreSQL、FastMCP、LangGraph、Langfuse 打通核心闭环；Public Beta 后再逐步引入 managed database、queue、OIDC、KMS、SLO 和生产级发布工具。  
-> 安全原则：所有真实密钥不进 Git；仓库只保留 `.env.example` 和占位配置。
+> 安全原则：所有真实密钥不进 Git；仓库只保留 `../.env.example` 和占位配置。
 
 ---
 
@@ -279,7 +279,7 @@ homepilot-agent/
 └─ docs/
 ```
 
-### 6.2 `pyproject.toml` 建议骨架
+### 6.2 `../pyproject.toml` 建议骨架
 
 ```toml
 [project]
@@ -337,11 +337,11 @@ local-model = [
 ]
 ```
 
-> 具体锁定的 patch 版本以 `uv.lock` 为准。不要在文档中手动改版本后不同步安装。
+> 具体锁定的 patch 版本以 `../uv.lock` 为准。不要在文档中手动改版本后不同步安装。
 
 ## 7. 环境变量与配置
 
-### 7.1 `.env.example`
+### 7.1 `../.env.example`
 
 ```dotenv
 # ---------- App ----------
@@ -411,7 +411,7 @@ FEATURE_LOCAL_MODEL_FALLBACK=false
 | 文件 | 内容 | 变更方式 |
 |---|---|---|
 | `.env` | 本机真实 secret | 不提交 Git |
-| `.env.example` | 所有变量名和占位值 | 提交 Git |
+| `../.env.example` | 所有变量名和占位值 | 提交 Git |
 | `config/model_providers.yaml` | 模型路由、超时、重试、fallback、成本上限 | PR 评审 |
 | `config/mcp_servers.yaml` | MCP Server 地址、allow/deny 工具、超时、鉴权方式 | PR 评审 |
 | `config/risk_rules.yaml` | 控制风险等级、审批要求、禁止动作 | PR 评审 + CI 红线 |
