@@ -1,0 +1,19 @@
+cat > .gitignore << 'EOF'
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+
+# 系统文件
+.DS_Store
+
+# 环境变量 / 密钥（如有）
+.env
+.env.*
+EOF
