@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     api_host: str = "127.0.0.1"
     api_port: int = 8000
+    # Alembic 使用同步驱动连接业务库；缺失时快速失败，避免静默连错库。
+    database_url_sync: str
 
 
 @lru_cache
