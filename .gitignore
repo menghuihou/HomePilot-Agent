@@ -19,3 +19,6 @@ doc/
 .env
 .env.*
 !.env.example
+
+# 文档（项目完成前暂不上传；补充完内容后删除本行再提交）
+README.md

@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.config import get_settings
+from app.routers import devices, homes
 
 settings = get_settings()
 
@@ -8,6 +9,9 @@ app = FastAPI(
     title="HomePilot Agent",
     version="0.1.0",
 )
+
+app.include_router(homes.router)
+app.include_router(devices.router)
 
 
 @app.get("/health")

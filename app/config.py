@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     api_port: int = 8000
     # Alembic 使用同步驱动连接业务库；缺失时快速失败，避免静默连错库。
     database_url_sync: str
+    # FastAPI 运行时使用异步驱动连接业务库。
+    database_url: str
 
 
 @lru_cache

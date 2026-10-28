@@ -81,7 +81,9 @@ class Device(Base):
 
     home: Mapped["Home"] = relationship(back_populates="devices")
     room: Mapped["Room | None"] = relationship(back_populates="devices")
-    events: Mapped[list["DeviceEvent"]] = relationship(back_populates="device")
+    events: Mapped[list["DeviceEvent"]] = relationship(
+        back_populates="device", cascade="all, delete-orphan"
+    )
 
 
 class DeviceEvent(Base):
