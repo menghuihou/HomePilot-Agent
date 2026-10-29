@@ -23,9 +23,9 @@ async def _get_home_or_404(home_id: int, session: AsyncSession) -> Home:
 
 @router.put("/homes/{home_id}/preferences", response_model=PreferenceRead)
 async def upsert_preference(
-        home_id: int,
-        payload: PreferenceCreate,
-        session: Annotated[AsyncSession, Depends(get_session)],
+    home_id: int,
+    payload: PreferenceCreate,
+    session: Annotated[AsyncSession, Depends(get_session)],
 ) -> Preference:
     """按（家庭、成员、键）唯一写入偏好，键已存在时覆盖原值。"""
     await _get_home_or_404(home_id, session)
@@ -60,7 +60,7 @@ async def upsert_preference(
 
 @router.get("/homes/{home_id}/preferences", response_model=list[PreferenceRead])
 async def list_preferences(
-        home_id: int, session: Annotated[AsyncSession, Depends(get_session)]
+    home_id: int, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> list[Preference]:
     """列出指定家庭下的全部偏好。"""
     await _get_home_or_404(home_id, session)
