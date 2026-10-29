@@ -49,6 +49,17 @@ def home_id(client) -> Generator[int, Any]:
     _cleanup_home(home_id)
 
 
+@pytest.fixture()
+def other_home_id(client) -> Generator[int, Any]:
+    """创建第二个测试家庭，供跨家庭隔离类用例使用，结束后同样清理。"""
+    name = f"test-home-{uuid4().hex[:8]}"
+    resp = client.post("/homes", json={"name": name})
+    assert resp.status_code == 201, resp.text
+    other_home_id = resp.json()["id"]
+    yield other_home_id
+    _cleanup_home(other_home_id)
+
+
 def _cleanup_home(home_id: int) -> None:
     """按外键依赖顺序删除测试家庭及其子数据，保证开发库不残留测试数据。"""
     with psycopg.connect(_sync_conninfo()) as conn, conn.cursor() as cur:
@@ -60,6 +71,7 @@ def _cleanup_home(home_id: int) -> None:
             (home_id,),
         )
         cur.execute("DELETE FROM devices WHERE home_id = %s", (home_id,))
+        cur.execute("DELETE FROM preferences WHERE home_id = %s", (home_id,))
         cur.execute("DELETE FROM rooms WHERE home_id = %s", (home_id,))
         cur.execute("DELETE FROM members WHERE home_id = %s", (home_id,))
         cur.execute("DELETE FROM homes WHERE id = %s", (home_id,))

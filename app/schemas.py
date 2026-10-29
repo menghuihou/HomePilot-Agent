@@ -90,3 +90,20 @@ class DeviceEventRead(DeviceEventCreate):
     source_type: str
     created_at: datetime
     updated_at: datetime
+
+
+class PreferenceCreate(BaseModel):
+    member_id: int | None = None
+    pref_key: str
+    pref_value: str
+
+
+class PreferenceRead(PreferenceCreate):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    home_id: int
+    synthetic: bool
+    source_type: str
+    created_at: datetime
+    updated_at: datetime
