@@ -1,36 +1,23 @@
-"""核心 CRUD 接口的功能测试，对应第 1 周计划第 7 步检查点。"""
+"""设备与设备事件接口测试，对应第 7 步检查点。"""
 
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 
-def test_create_home_room_member(client: TestClient, home_id: int) -> None:
-    """家庭、房间、成员均能创建。"""
-    room = client.post(
-        f"/homes/{home_id}/rooms", json={"name": "living-room", "room_type": "living_room"}
-    )
-    assert room.status_code == 201
-    assert room.json()["home_id"] == home_id
-
-    member = client.post(f"/homes/{home_id}/members", json={"name": "hmh", "role": "admin"})
-    assert member.status_code == 201
-
-    rooms = client.get(f"/homes/{home_id}/rooms").json()
-    members = client.get(f"/homes/{home_id}/members").json()
-    assert len(rooms) == 1
-    assert len(members) == 1
-
-
 def test_create_device_with_room(client: TestClient, home_id: int) -> None:
     """设备能绑定家庭内的房间。"""
-    room_id = client.post(
-        f"/homes/{home_id}/rooms", json={"name": "bedroom"}
-    ).json()["id"]
+    room_id = client.post(f"/homes/{home_id}/rooms", json={"name": "bedroom"}).json()[
+        "id"
+    ]
 
     resp = client.post(
         f"/homes/{home_id}/devices",
-        json={"name": f"light-{uuid4().hex[:8]}", "device_type": "light", "room_id": room_id},
+        json={
+            "name": f"light-{uuid4().hex[:8]}",
+            "device_type": "light",
+            "room_id": room_id,
+        },
     )
     assert resp.status_code == 201
     assert resp.json()["room_id"] == room_id
@@ -39,7 +26,9 @@ def test_create_device_with_room(client: TestClient, home_id: int) -> None:
 
 def test_reject_device_for_missing_home(client: TestClient) -> None:
     """不存在的家庭不能绑定设备。"""
-    resp = client.post("/homes/999999999/devices", json={"name": "ghost", "device_type": "light"})
+    resp = client.post(
+        "/homes/999999999/devices", json={"name": "ghost", "device_type": "light"}
+    )
     assert resp.status_code == 404
 
 
@@ -47,17 +36,26 @@ def test_reject_device_for_missing_room(client: TestClient, home_id: int) -> Non
     """不存在的房间不能绑定设备。"""
     resp = client.post(
         f"/homes/{home_id}/devices",
-        json={"name": f"light-{uuid4().hex[:8]}", "device_type": "light", "room_id": 987654321},
+        json={
+            "name": f"light-{uuid4().hex[:8]}",
+            "device_type": "light",
+            "room_id": 987654321,
+        },
     )
     assert resp.status_code == 404
 
 
-def test_reject_duplicate_device_name_in_same_home(client: TestClient, home_id: int) -> None:
+def test_reject_duplicate_device_name_in_same_home(
+    client: TestClient, home_id: int
+) -> None:
     """同一家庭下设备名必须唯一；不同名称可正常创建。"""
     name = f"light-{uuid4().hex[:8]}"
-    assert client.post(
-        f"/homes/{home_id}/devices", json={"name": name, "device_type": "light"}
-    ).status_code == 201
+    assert (
+        client.post(
+            f"/homes/{home_id}/devices", json={"name": name, "device_type": "light"}
+        ).status_code
+        == 201
+    )
 
     resp = client.post(
         f"/homes/{home_id}/devices", json={"name": name, "device_type": "light"}
@@ -90,7 +88,9 @@ def test_update_device(client: TestClient, home_id: int) -> None:
     first = client.post(
         f"/homes/{home_id}/devices", json={"name": name_a, "device_type": "light"}
     ).json()["id"]
-    client.post(f"/homes/{home_id}/devices", json={"name": name_b, "device_type": "light"})
+    client.post(
+        f"/homes/{home_id}/devices", json={"name": name_b, "device_type": "light"}
+    )
 
     resp = client.patch(f"/devices/{first}", json={"name": name_b})
     assert resp.status_code == 409

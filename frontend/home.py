@@ -54,7 +54,9 @@ except requests.RequestException as exc:
     st.stop()
 
 if not homes:
-    st.info("暂无家庭数据。可运行 `uv run python -m db.seeds.load_family` 生成演示数据。")
+    st.info(
+        "暂无家庭数据。可运行 `uv run python -m db.seeds.load_family` 生成演示数据。"
+    )
     st.stop()
 
 home_labels = [f"{h['name']}（#{h['id']}）" for h in homes]
@@ -100,7 +102,9 @@ st.subheader("➕ 录入设备")
 with st.form("add-device", clear_on_submit=True):
     device_name = st.text_input("设备名称")
     device_type = st.text_input(
-        "设备类型", value="light", help="如 light / thermostat / sensor / plug / gateway"
+        "设备类型",
+        value="light",
+        help="如 light / thermostat / sensor / plug / gateway",
     )
     vendor = st.text_input("厂商（可选）")
     room_options = ["（不分配房间）"] + [r["name"] for r in rooms]
@@ -116,7 +120,9 @@ if submitted:
             "device_type": device_type.strip() or "light",
         }
         if room_choice != "（不分配房间）":
-            payload["room_id"] = next(r["id"] for r in rooms if r["name"] == room_choice)
+            payload["room_id"] = next(
+                r["id"] for r in rooms if r["name"] == room_choice
+            )
         try:
             created = _api_post(f"/homes/{home_id}/devices", payload)
             st.success(f"设备「{created['name']}」已添加。")

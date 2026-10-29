@@ -1,10 +1,10 @@
-from typing import Any, Generator
+from collections.abc import Generator
+from typing import Any
 from uuid import uuid4
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from starlette.testclient import TestClient
 
 from app.config import get_settings
 from app.main import application
@@ -28,7 +28,7 @@ def db_ready() -> None:
 
 
 @pytest.fixture(scope="session")
-def client(db_ready) -> Generator[TestClient, Any, None]:
+def client(db_ready) -> Generator[TestClient, Any]:
     """进程内调用 FastAPI 应用，不依赖正在运行的 uvicorn 服务。
 
     会话级共享同一个 TestClient：TestClient 内部维护独立事件循环，
@@ -39,7 +39,7 @@ def client(db_ready) -> Generator[TestClient, Any, None]:
 
 
 @pytest.fixture()
-def home_id(client) -> Generator[Any, Any, None]:
+def home_id(client) -> Generator[int, Any]:
     """创建一个测试家庭，测试结束后清理其下全部关联数据。"""
     name = f"test-home-{uuid4().hex[:8]}"
     resp = client.post("/homes", json={"name": name})

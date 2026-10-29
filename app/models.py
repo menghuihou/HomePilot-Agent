@@ -17,12 +17,16 @@ class Home(Base):
     address: Mapped[str | None] = mapped_column(String(200))
     synthetic: Mapped[bool] = mapped_column(default=True)
     source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
-    rooms: Mapped[list["Room"]] = relationship(back_populates="home")
-    members: Mapped[list["Member"]] = relationship(back_populates="home")
-    devices: Mapped[list["Device"]] = relationship(back_populates="home")
+    rooms: Mapped[list[Room]] = relationship(back_populates="home")
+    members: Mapped[list[Member]] = relationship(back_populates="home")
+    devices: Mapped[list[Device]] = relationship(back_populates="home")
 
 
 class Room(Base):
@@ -37,11 +41,15 @@ class Room(Base):
     room_type: Mapped[str | None] = mapped_column(String(30))
     synthetic: Mapped[bool] = mapped_column(default=True)
     source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
-    home: Mapped["Home"] = relationship(back_populates="rooms")
-    devices: Mapped[list["Device"]] = relationship(back_populates="room")
+    home: Mapped[Home] = relationship(back_populates="rooms")
+    devices: Mapped[list[Device]] = relationship(back_populates="room")
 
 
 class Member(Base):
@@ -56,10 +64,14 @@ class Member(Base):
     role: Mapped[str] = mapped_column(String(20), default="member")
     synthetic: Mapped[bool] = mapped_column(default=True)
     source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
-    home: Mapped["Home"] = relationship(back_populates="members")
+    home: Mapped[Home] = relationship(back_populates="members")
 
 
 class Device(Base):
@@ -76,12 +88,16 @@ class Device(Base):
     vendor: Mapped[str | None] = mapped_column(String(50))
     synthetic: Mapped[bool] = mapped_column(default=True)
     source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
-    home: Mapped["Home"] = relationship(back_populates="devices")
-    room: Mapped["Room | None"] = relationship(back_populates="devices")
-    events: Mapped[list["DeviceEvent"]] = relationship(
+    home: Mapped[Home] = relationship(back_populates="devices")
+    room: Mapped[Room | None] = relationship(back_populates="devices")
+    events: Mapped[list[DeviceEvent]] = relationship(
         back_populates="device", cascade="all, delete-orphan"
     )
 
@@ -96,10 +112,16 @@ class DeviceEvent(Base):
     # 事件类型，如 power_on / state_change / heartbeat。
     event_type: Mapped[str] = mapped_column(String(30))
     payload: Mapped[dict | None] = mapped_column(JSONB)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     synthetic: Mapped[bool] = mapped_column(default=True)
     source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
-    device: Mapped["Device"] = relationship(back_populates="events")
+    device: Mapped[Device] = relationship(back_populates="events")

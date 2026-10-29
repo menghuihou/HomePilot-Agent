@@ -122,7 +122,8 @@ async def _print_summary(session, home_id: int) -> None:
     members = await count(Member, Member.home_id == home_id)
     devices = await count(Device, Device.home_id == home_id)
     events = await count(
-        DeviceEvent, DeviceEvent.device_id.in_(select(Device.id).where(Device.home_id == home_id))
+        DeviceEvent,
+        DeviceEvent.device_id.in_(select(Device.id).where(Device.home_id == home_id)),
     )
     print(
         "种子数据写入完成："
