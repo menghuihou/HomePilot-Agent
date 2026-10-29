@@ -8,7 +8,6 @@
 
 import sys
 from pathlib import Path
-from uuid import uuid4
 
 import requests
 import streamlit as st
@@ -25,15 +24,15 @@ st.set_page_config(page_title="HomePilot 家庭状态", page_icon="🏠")
 st.title("🏠 HomePilot 家庭状态")
 
 
-def _api_get(path: str) -> list | dict:
-    resp = requests.get(f"{settings.streamlit_api_base_url}{path}", timeout=5)
+def _api_get(path: str, timeout: float = 5) -> list | dict:
+    resp = requests.get(f"{settings.streamlit_api_base_url}{path}", timeout=timeout)
     resp.raise_for_status()
     return resp.json()
 
 
-def _api_post(path: str, payload: dict) -> dict:
+def _api_post(path: str, payload: dict, timeout: float = 5) -> dict:
     resp = requests.post(
-        f"{settings.streamlit_api_base_url}{path}", json=payload, timeout=5
+        f"{settings.streamlit_api_base_url}{path}", json=payload, timeout=timeout
     )
     if resp.status_code >= 400:
         try:
@@ -44,34 +43,12 @@ def _api_post(path: str, payload: dict) -> dict:
     return resp.json()
 
 
-def _invoke_llm(prompt: str) -> str:
-    """按 .env 中的模型配置发起一次真实调用；未配置密钥时由页面提前拦截。"""
-    from langchain_anthropic import ChatAnthropic
-
-    kwargs = {
-        "model": settings.light_model or "claude-sonnet-4-5",
-        "api_key": settings.model_api_key,
-        # GLM 等推理模型会先输出 thinking 块，额度太小会导致正文被截断。
-        "max_tokens": 1024,
-    }
-    if settings.model_base_url:
-        kwargs["base_url"] = settings.model_base_url
-    content = ChatAnthropic(**kwargs).invoke(prompt).content
-    if isinstance(content, list):
-        # 推理模型返回 thinking + text 多块内容，拼接其中的文本部分。
-        text = "".join(
-            block.get("text", "") for block in content if isinstance(block, dict)
-        )
-        return text or str(content)
-    return str(content)
-
-
 try:
     homes = _api_get("/homes")
 except requests.RequestException as exc:
     st.error(
         f"无法连接 API 服务（{settings.streamlit_api_base_url}）。"
-        "请先启动：uv run uvicorn app.main:app --reload"
+        "请先启动：uv run uvicorn app.main:application --reload"
     )
     st.caption(str(exc))
     st.stop()
@@ -149,21 +126,19 @@ if submitted:
 
 st.subheader("🤖 LLM 调用演示")
 st.caption(
-    "点击后生成一次模型调用的 trace id；完成 Langfuse 接入后，"
-    "可在 Langfuse 中按该 id 检索调用链路。"
+    "点击后调用后端模型接口；下方 trace id 可直接在 Langfuse 中检索完整调用链路。"
 )
 if st.button("触发一次 LLM 调用"):
-    trace_id = str(uuid4())
-    st.session_state["last_trace_id"] = trace_id
-    if not settings.model_api_key:
-        st.warning("未配置 MODEL_API_KEY，本次仅生成 trace id，未真实调用模型。")
-    else:
-        with st.spinner("模型调用中……"):
-            try:
-                answer = _invoke_llm("用一句话说明智能家庭助手能做什么。")
-                st.success(answer)
-            except Exception as exc:  # noqa: BLE001 - 演示页面需要把调用错误直接反馈给用户
-                st.error(f"LLM 调用失败：{exc}")
+    with st.spinner("模型调用中……"):
+        try:
+            # LLM 是真实推理调用，耗时远超普通接口，放宽超时。
+            result = _api_post("/llm/demo", {}, timeout=120)
+            st.success(result["answer"])
+            st.session_state["last_trace_id"] = result["trace_id"]
+        except requests.RequestException as exc:
+            st.error(f"请求失败，请确认 API 服务已启动：{exc}")
+        except RuntimeError as exc:
+            st.error(f"LLM 调用失败：{exc}")
 if "last_trace_id" in st.session_state:
     st.write("本次 trace id：")
     st.code(st.session_state["last_trace_id"], language=None)

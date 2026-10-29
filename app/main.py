@@ -1,20 +1,23 @@
 from fastapi import FastAPI
 
 from app.config import get_settings
-from app.routers import devices, homes
+from app.observability import setup_observability
+from app.routers import devices, homes, llm
 
 settings = get_settings()
 
-app = FastAPI(
+application = FastAPI(
     title="HomePilot Agent",
     version="0.1.0",
 )
 
-app.include_router(homes.router)
-app.include_router(devices.router)
+setup_observability(application)
+application.include_router(homes.router)
+application.include_router(devices.router)
+application.include_router(llm.router)
 
 
-@app.get("/health")
+@application.get("/health")
 def health() -> dict[str, str]:
     """健康检查，供本地验证和后续编排探活使用。"""
     return {"status": "ok", "env": settings.app_env}

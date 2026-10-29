@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     light_model: str = ""
     # Streamlit 页面调用的 API 地址。
     streamlit_api_base_url: str = "http://127.0.0.1:8000"
+    # 可观测性：OTel 资源服务名与 Langfuse 接入。
+    otel_service_name: str = "homepilot-agent"
+    langfuse_host: str = "http://localhost:3000"
+    langfuse_public_key: str = ""
+    langfuse_secret_key: str = ""
 
 
 @lru_cache

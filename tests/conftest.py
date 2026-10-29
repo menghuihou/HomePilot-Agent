@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from starlette.testclient import TestClient
 
 from app.config import get_settings
-from app.main import app
+from app.main import application
 
 
 def _sync_conninfo() -> str:
@@ -34,7 +34,7 @@ def client(db_ready) -> Generator[TestClient, Any, None]:
     会话级共享同一个 TestClient：TestClient 内部维护独立事件循环，
     共享实例可避免 asyncpg 连接池跨事件循环复用导致连接失败。
     """
-    with TestClient(app) as test_client:
+    with TestClient(application) as test_client:
         yield test_client
 
 
