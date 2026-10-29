@@ -5,6 +5,7 @@ from langfuse import get_client, observe
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
+from app.llm_client import build_chat_model
 
 router = APIRouter(tags=["llm"])
 
@@ -23,27 +24,10 @@ class LlmDemoResponse(BaseModel):
     trace_id: str
 
 
-def _build_chat_model():
-    settings = get_settings()
-    from langchain_anthropic import ChatAnthropic
-
-    kwargs = {
-        "model": settings.light_model or "claude-sonnet-4-5",
-        "api_key": settings.model_api_key,
-        # GLM 等推理模型先输出 thinking 块，额度太小会截断正文。
-        "max_tokens": 1024,
-        # 限制后端单次调用时长，避免网关异常时请求无限挂起。
-        "timeout": 60,
-    }
-    if settings.model_base_url:
-        kwargs["base_url"] = settings.model_base_url
-    return ChatAnthropic(**kwargs)
-
-
 @observe(as_type="generation", name="light-model-call")
 def _invoke_light_model(prompt: str) -> str:
     settings = get_settings()
-    message = _build_chat_model().invoke(prompt)
+    message = build_chat_model().invoke(prompt)
 
     usage = getattr(message, "usage_metadata", None)
     if usage:
