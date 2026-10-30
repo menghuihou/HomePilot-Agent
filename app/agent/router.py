@@ -47,6 +47,9 @@ def summarize_home_context(context: HomeContext) -> str:
     lines.append(
         "成员：" + ("、".join(member.name for member in context.members) or "无")
     )
+    lines.append(
+        "设备：" + ("、".join(f"{d.name}(id={d.id})" for d in context.devices) or "无")
+    )
     prefs = [
         f"{p.pref_key}={p.pref_value}"
         for p in context.preferences

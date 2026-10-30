@@ -1,13 +1,17 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# .env 锚定到项目根目录，避免从 examples/ 等子目录启动时按 cwd 找不到配置。
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 class Settings(BaseSettings):
     """第 1 周只读取应用基础配置；数据库和 Langfuse 配置在后续步骤接入。"""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=BASE_DIR / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )

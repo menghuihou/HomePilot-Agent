@@ -5,7 +5,7 @@ from langfuse import get_client, observe
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
-from app.llm_client import build_chat_model
+from app.llm_client import build_chat_model, extract_text_content
 
 router = APIRouter(tags=["llm"])
 
@@ -40,14 +40,7 @@ def _invoke_light_model(prompt: str) -> str:
             },
         )
 
-    content = message.content
-    if isinstance(content, list):
-        # 推理模型返回 thinking + text 多块内容，只保留正文。
-        text = "".join(
-            block.get("text", "") for block in content if isinstance(block, dict)
-        )
-        return text or str(content)
-    return str(content)
+    return extract_text_content(message.content)
 
 
 @router.post("/llm/demo", response_model=LlmDemoResponse)

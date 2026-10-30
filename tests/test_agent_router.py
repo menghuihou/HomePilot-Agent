@@ -15,7 +15,7 @@ from app.agent.router import (
     reply_for_intent,
     summarize_home_context,
 )
-from app.schemas import HomeRead, MemberRead, PreferenceRead, RoomRead
+from app.schemas import DeviceRead, HomeRead, MemberRead, PreferenceRead, RoomRead
 
 
 def _make_context() -> HomeContext:
@@ -31,6 +31,17 @@ def _make_context() -> HomeContext:
         home=HomeRead(id=1, name="测试之家", address=None, **base),
         rooms=[RoomRead(id=1, home_id=1, name="客厅", room_type=None, **base)],
         members=[MemberRead(id=1, home_id=1, name="小明", role="admin", **base)],
+        devices=[
+            DeviceRead(
+                id=10,
+                home_id=1,
+                name="客厅灯",
+                device_type="light",
+                vendor=None,
+                room_id=1,
+                **base,
+            )
+        ],
         preferences=[
             PreferenceRead(
                 id=1,
@@ -118,6 +129,8 @@ def test_classify_injects_home_context_summary():
     assert "测试之家" in system_content
     assert "device_alias:10=主灯" in system_content
     assert "sleep" in system_content
+    # 设备列表带 id，路由器和 chat 子图才能把「主灯」解析到具体设备。
+    assert "客厅灯(id=10)" in system_content
 
 
 def test_summarize_home_context_hides_home_mode_key():

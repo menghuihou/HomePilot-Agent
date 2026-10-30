@@ -20,3 +20,13 @@ def build_chat_model():
     if settings.model_base_url:
         kwargs["base_url"] = settings.model_base_url
     return ChatAnthropic(**kwargs)
+
+
+def extract_text_content(content: object) -> str:
+    """提取消息正文；推理模型可能返回 thinking + text 多块内容，只保留正文。"""
+    if isinstance(content, list):
+        text = "".join(
+            block.get("text", "") for block in content if isinstance(block, dict)
+        )
+        return text or str(content)
+    return str(content)
