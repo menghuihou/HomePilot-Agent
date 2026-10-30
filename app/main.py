@@ -4,7 +4,7 @@ from fastapi import FastAPI
 
 from app.config import get_settings
 from app.observability import setup_observability
-from app.routers import devices, homes, llm, preferences
+from app.routers import chat, devices, homes, llm, preferences
 
 settings = get_settings()
 
@@ -23,6 +23,7 @@ setup_observability(application)
 application.include_router(homes.router)
 application.include_router(devices.router)
 application.include_router(preferences.router)
+application.include_router(chat.router)
 application.include_router(llm.router)
 
 
