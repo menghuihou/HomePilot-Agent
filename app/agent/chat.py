@@ -3,16 +3,17 @@
 主图流程：load_context -> route ->（chat 子图 | direct_reply）-> to_answer。
 """
 
+from collections.abc import Awaitable, Callable
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AnyMessage, SystemMessage
+from langchain_core.messages import AnyMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langfuse import get_client, observe
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import InjectedState, ToolNode
+from langgraph.prebuilt import InjectedState
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -22,6 +23,7 @@ from app.agent.state import AgentState
 from app.config import get_settings
 from app.database import session_factory
 from app.llm_client import build_chat_model, extract_text_content
+from app.mcp.client import get_light_tools
 from app.models import Home, Preference
 
 _CHAT_SYSTEM_PROMPT = """你是家庭智能助手「HomePilot」，用中文口语化回复。
@@ -83,10 +85,13 @@ async def record_preference(
     return await _record_preference(home_id, pref_key, pref_value)
 
 
-def build_chat_graph(chat_model=None):
+def build_chat_graph(
+    chat_model=None, extra_tools_provider: Callable[[], Awaitable[list]] | None = None
+):
     """构建 chat 子图：reply ⇄ tools 循环，直到模型给出最终回复。
 
     chat_model 供测试注入桩模型；生产路径按需构建真实模型。
+    extra_tools_provider 返回动态发现的 MCP 工具（第 6 步），None 表示不挂载。
     """
 
     @observe(as_type="generation", name="chat-reply")
@@ -100,7 +105,10 @@ def build_chat_graph(chat_model=None):
 
     async def reply(state: ChatState, config: RunnableConfig) -> dict:
         model = chat_model or build_chat_model()
-        bound = model.bind_tools([record_preference])
+        tools = [record_preference]
+        if extra_tools_provider is not None:
+            tools += list(await extra_tools_provider())
+        bound = model.bind_tools(tools)
         system = SystemMessage(
             content=_CHAT_SYSTEM_PROMPT.format(
                 home_summary=summarize_home_context(state["home_context"])
@@ -111,22 +119,62 @@ def build_chat_graph(chat_model=None):
         )
         return {"messages": [response]}
 
+    async def run_tools(state: ChatState, config) -> dict:
+        """执行最后一条 AI 消息里的全部工具调用（含动态发现的 MCP 工具）。
+
+        单个工具失败只把错误文本回给模型，不中断整个对话。
+        """
+        tools = [record_preference]
+        if extra_tools_provider is not None:
+            tools += list(await extra_tools_provider())
+        available = {t.name: t for t in tools}
+
+        outputs = []
+        for call in getattr(state["messages"][-1], "tool_calls", None) or []:
+            selected = available.get(call["name"])
+            if selected is None:
+                outputs.append(
+                    ToolMessage(
+                        content=f"未知工具：{call['name']}", tool_call_id=call["id"]
+                    )
+                )
+                continue
+            try:
+                call_args = dict(call["args"])
+                # ToolNode 会注入 InjectedState 字段；手写节点需自行补齐。
+                # 本周注入字段仅 home_id，来自图状态，模型不可见不可改。
+                if (
+                    "home_id" in selected.args_schema.model_fields
+                    and "home_id" not in call_args
+                ):
+                    call_args["home_id"] = state["home_id"]
+                result = await selected.ainvoke(call_args)
+                outputs.append(
+                    ToolMessage(content=str(result), tool_call_id=call["id"])
+                )
+            except Exception as exc:  # noqa: BLE001
+                # Server 崩溃等失败不中断对话：错误文本作为工具结果回给模型。
+                outputs.append(
+                    ToolMessage(content=f"工具调用失败：{exc}", tool_call_id=call["id"])
+                )
+        return {"messages": outputs}
+
     def _after_reply(state: ChatState) -> str:
         last = state["messages"][-1]
         return "tools" if getattr(last, "tool_calls", None) else END
 
     builder = StateGraph(ChatState)
     builder.add_node("reply", reply)
-    builder.add_node("tools", ToolNode([record_preference]))
+    builder.add_node("tools", run_tools)
     builder.add_edge(START, "reply")
     builder.add_conditional_edges("reply", _after_reply, ["tools", END])
     builder.add_edge("tools", "reply")
     return builder.compile(checkpointer=MemorySaver())
 
 
-def build_agent_graph(router_model=None, chat_model=None):
+def build_agent_graph(router_model=None, chat_model=None, extra_tools_provider=None):
     """构建 Agent 主图；两个模型参数仅供测试注入桩。"""
-    chat_graph = build_chat_graph(chat_model)
+    chat_graph = build_chat_graph(chat_model, extra_tools_provider)
 
     async def load_context(state: AgentState) -> dict:
         async with session_factory() as session:
@@ -168,4 +216,4 @@ def build_agent_graph(router_model=None, chat_model=None):
 
 
 # 供接口层（第 7 步 chat 路由）直接导入使用。
-agent_graph = build_agent_graph()
+agent_graph = build_agent_graph(extra_tools_provider=get_light_tools)
