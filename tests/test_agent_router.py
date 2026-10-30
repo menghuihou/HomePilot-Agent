@@ -3,6 +3,7 @@
 全部使用桩模型，不依赖真实 LLM，保证测试确定性。
 """
 
+import asyncio
 from datetime import datetime
 
 import pytest
@@ -67,7 +68,7 @@ class StubChatModel:
         model = self
 
         class _Structured:
-            def invoke(self, messages):
+            async def ainvoke(self, messages):
                 model.received_messages = list(messages)
                 return model.decision
 
@@ -79,7 +80,7 @@ class BrokenChatModel:
 
     def with_structured_output(self, schema):
         class _Structured:
-            def invoke(self, messages):
+            async def ainvoke(self, messages):
                 raise ValueError("模拟结构化输出解析失败")
 
         return _Structured()
@@ -99,8 +100,10 @@ def test_classify_returns_model_decision(utterance, intent):
     model = StubChatModel(RouterDecision(intent=intent))
 
     assert (
-        classify_intent(
-            [HumanMessage(content=utterance)], _make_context(), chat_model=model
+        asyncio.run(
+            classify_intent(
+                [HumanMessage(content=utterance)], _make_context(), chat_model=model
+            )
         )
         == intent
     )
@@ -108,10 +111,12 @@ def test_classify_returns_model_decision(utterance, intent):
 
 def test_classify_falls_back_to_chat_on_invalid_output():
     assert (
-        classify_intent(
-            [HumanMessage(content="你好")],
-            _make_context(),
-            chat_model=BrokenChatModel(),
+        asyncio.run(
+            classify_intent(
+                [HumanMessage(content="你好")],
+                _make_context(),
+                chat_model=BrokenChatModel(),
+            )
         )
         == "chat"
     )
@@ -120,8 +125,10 @@ def test_classify_falls_back_to_chat_on_invalid_output():
 def test_classify_injects_home_context_summary():
     model = StubChatModel(RouterDecision(intent="chat"))
 
-    classify_intent(
-        [HumanMessage(content="把客厅灯叫主灯")], _make_context(), chat_model=model
+    asyncio.run(
+        classify_intent(
+            [HumanMessage(content="把客厅灯叫主灯")], _make_context(), chat_model=model
+        )
     )
 
     system_content = model.received_messages[0].content

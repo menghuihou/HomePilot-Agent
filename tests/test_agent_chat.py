@@ -26,7 +26,7 @@ class StubRouterModel:
         decision = self._decision
 
         class _Structured:
-            def invoke(self, messages):
+            async def ainvoke(self, messages):
                 return decision
 
         return _Structured()

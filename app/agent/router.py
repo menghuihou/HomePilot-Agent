@@ -4,6 +4,7 @@ Router 只做分类，不回答业务问题；home_mode 直接读上下文回答
 control / diagnose / inspect 返回占位回复，chat 交给 chat 子图。
 """
 
+import logging
 from typing import Literal
 
 from langchain_core.messages import BaseMessage, SystemMessage
@@ -11,10 +12,11 @@ from langfuse import get_client, observe
 from pydantic import BaseModel
 
 from app.agent.context import HOME_MODE_KEY, HomeContext
-from app.config import get_settings
-from app.llm_client import build_chat_model
+from app.llm_client import build_chat_model, default_model_name
 
 Intent = Literal["chat", "control", "diagnose", "inspect", "home_mode"]
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT_TEMPLATE = """你是智能家庭助手的意图路由器，只负责分类，不回答业务问题。可选意图：
 - chat：闲聊、一般问答、设置偏好或称呼（如「把客厅灯叫主灯」）
@@ -60,17 +62,17 @@ def summarize_home_context(context: HomeContext) -> str:
 
 
 @observe(as_type="generation", name="intent-router")
-def _invoke_router(chat_model, prompt_messages: list) -> RouterDecision:
+async def _invoke_router(chat_model, prompt_messages: list) -> RouterDecision:
     """调用 LLM 并解析为结构化意图；解析失败由 classify_intent 兜底。"""
-    decision = chat_model.with_structured_output(RouterDecision).invoke(prompt_messages)
-    # with_structured_output 不回填模型名，Langfuse generation 里手动补上。
-    get_client().update_current_generation(
-        model=get_settings().light_model or "claude-sonnet-4-5"
+    decision = await chat_model.with_structured_output(RouterDecision).ainvoke(
+        prompt_messages
     )
+    # with_structured_output 不回填模型名，Langfuse generation 里手动补上。
+    get_client().update_current_generation(model=default_model_name())
     return decision
 
 
-def classify_intent(
+async def classify_intent(
     messages: list[BaseMessage],
     home_context: HomeContext,
     chat_model=None,
@@ -81,12 +83,13 @@ def classify_intent(
         home_summary=summarize_home_context(home_context)
     )
     try:
-        decision = _invoke_router(
+        decision = await _invoke_router(
             model, [SystemMessage(content=system_prompt), *messages]
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         # 兜底边界：结构化解析失败、网关超时等多种异常类型都不应中断对话，
-        # 统一降级为闲聊意图；失败详情已在 Langfuse generation 中记录。
+        # 统一降级为闲聊意图；本地日志兜底 Langfuse 不可用或未配置的场景。
+        logger.warning("意图路由失败，已降级为 chat", exc_info=True)
         return "chat"
     return decision.intent
 

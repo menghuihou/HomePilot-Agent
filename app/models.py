@@ -80,6 +80,10 @@ class Device(Base):
     """智能设备，必须归属一个家庭，房间可以后续再分配。"""
 
     __tablename__ = "devices"
+    __table_args__ = (
+        # 设备名唯一是业务不变量；应用层预检查外，数据库层必须兜底并发写入。
+        UniqueConstraint("home_id", "name", name="uq_devices_home_name"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     home_id: Mapped[int] = mapped_column(ForeignKey("homes.id"))

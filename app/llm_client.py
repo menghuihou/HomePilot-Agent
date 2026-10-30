@@ -2,6 +2,13 @@
 
 from app.config import get_settings
 
+DEFAULT_LIGHT_MODEL = "claude-sonnet-4-5"
+
+
+def default_model_name() -> str:
+    """返回当前生效的轻量模型名，供构建模型与观测元数据共用。"""
+    return get_settings().light_model or DEFAULT_LIGHT_MODEL
+
 
 def build_chat_model():
     """按环境配置构建轻量模型客户端。"""
@@ -10,7 +17,7 @@ def build_chat_model():
     from langchain_anthropic import ChatAnthropic
 
     kwargs = {
-        "model": settings.light_model or "claude-sonnet-4-5",
+        "model": default_model_name(),
         "api_key": settings.model_api_key,
         # GLM 等推理模型先输出 thinking 块，额度太小会截断正文。
         "max_tokens": 1024,

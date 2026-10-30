@@ -85,7 +85,7 @@ class McpToolClient:
             coroutine=_acall,
             name=tool_name,
             description=mcp_tool.description or "",
-            args_schema=_schema_to_args_model(tool_name, mcp_tool.inputSchema),
+            args_schema=_schema_to_args_model(tool_name, mcp_tool.input_schema),
         )
 
     async def aclose(self) -> None:

@@ -63,6 +63,17 @@ def test_reject_duplicate_device_name_in_same_home(
     assert resp.status_code == 409
 
 
+def test_reject_overlong_device_name(client: TestClient, home_id: int) -> None:
+    """输入校验在进入数据库前拦截超长设备名，返回 FastAPI 语义的 422。"""
+    resp = client.post(
+        f"/homes/{home_id}/devices",
+        json={"name": "x" * 101, "device_type": "light"},
+    )
+
+    assert resp.status_code == 422
+    assert "String should have at most 100 characters" in resp.text
+
+
 def test_device_event_roundtrip(client: TestClient, home_id: int) -> None:
     """设备事件能写入并按设备查询。"""
     device_id = client.post(

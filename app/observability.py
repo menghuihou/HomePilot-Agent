@@ -8,6 +8,7 @@
 """
 
 import base64
+import logging
 
 from fastapi import FastAPI
 from langfuse import Langfuse
@@ -20,29 +21,40 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from app.config import get_settings
 
+logger = logging.getLogger(__name__)
 
-def setup_observability(app: FastAPI) -> Langfuse:
+
+def setup_observability(app: FastAPI) -> Langfuse | None:
     """初始化 tracer provider 并为 FastAPI 应用挂载请求插桩。"""
     settings = get_settings()
 
     provider = TracerProvider(
         resource=Resource.create({"service.name": settings.otel_service_name})
     )
-    credentials = base64.b64encode(
-        f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}".encode()
-    ).decode()
-    exporter = OTLPSpanExporter(
-        endpoint=f"{settings.langfuse_host}/api/public/otel/v1/traces",
-        headers={"Authorization": f"Basic {credentials}"},
+
+    langfuse_configured = bool(
+        settings.langfuse_public_key and settings.langfuse_secret_key
     )
-    provider.add_span_processor(BatchSpanProcessor(exporter))
+    langfuse: Langfuse | None = None
+    if langfuse_configured:
+        credentials = base64.b64encode(
+            f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}".encode()
+        ).decode()
+        exporter = OTLPSpanExporter(
+            endpoint=f"{settings.langfuse_host}/api/public/otel/v1/traces",
+            headers={"Authorization": f"Basic {credentials}"},
+        )
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        langfuse = Langfuse(
+            public_key=settings.langfuse_public_key,
+            secret_key=settings.langfuse_secret_key,
+            host=settings.langfuse_host,
+            tracer_provider=provider,
+        )
+    else:
+        logger.info("Langfuse 未配置，追踪导出已禁用")
+
     trace.set_tracer_provider(provider)
 
-    langfuse = Langfuse(
-        public_key=settings.langfuse_public_key,
-        secret_key=settings.langfuse_secret_key,
-        host=settings.langfuse_host,
-        tracer_provider=provider,
-    )
     FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
     return langfuse

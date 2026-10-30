@@ -4,8 +4,7 @@ from fastapi import APIRouter
 from langfuse import get_client, observe
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
-from app.llm_client import build_chat_model, extract_text_content
+from app.llm_client import build_chat_model, default_model_name, extract_text_content
 
 router = APIRouter(tags=["llm"])
 
@@ -25,14 +24,13 @@ class LlmDemoResponse(BaseModel):
 
 
 @observe(as_type="generation", name="light-model-call")
-def _invoke_light_model(prompt: str) -> str:
-    settings = get_settings()
-    message = build_chat_model().invoke(prompt)
+async def _invoke_light_model(prompt: str) -> str:
+    message = await build_chat_model().ainvoke(prompt)
 
     usage = getattr(message, "usage_metadata", None)
     if usage:
         get_client().update_current_generation(
-            model=settings.light_model or "claude-sonnet-4-5",
+            model=default_model_name(),
             usage_details={
                 "input": usage.get("input_tokens", 0),
                 "output": usage.get("output_tokens", 0),
@@ -44,13 +42,12 @@ def _invoke_light_model(prompt: str) -> str:
 
 
 @router.post("/llm/demo", response_model=LlmDemoResponse)
-def llm_demo(payload: LlmDemoRequest) -> LlmDemoResponse:
+async def llm_demo(payload: LlmDemoRequest) -> LlmDemoResponse:
     """触发一次轻量模型调用，返回回答与本次调用的 Langfuse trace id。"""
-    answer = _invoke_light_model(payload.prompt)
-    settings = get_settings()
+    answer = await _invoke_light_model(payload.prompt)
     trace_id = get_client().get_current_trace_id() or ""
     return LlmDemoResponse(
         answer=answer,
-        model=settings.light_model or "claude-sonnet-4-5",
+        model=default_model_name(),
         trace_id=trace_id,
     )

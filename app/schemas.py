@@ -1,11 +1,11 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class HomeCreate(BaseModel):
-    name: str
-    address: str | None = None
+    name: str = Field(max_length=100)
+    address: str | None = Field(default=None, max_length=200)
 
 
 class HomeRead(HomeCreate):
@@ -19,8 +19,8 @@ class HomeRead(HomeCreate):
 
 
 class RoomCreate(BaseModel):
-    name: str
-    room_type: str | None = None
+    name: str = Field(max_length=50)
+    room_type: str | None = Field(default=None, max_length=30)
 
 
 class RoomRead(RoomCreate):
@@ -35,8 +35,8 @@ class RoomRead(RoomCreate):
 
 
 class MemberCreate(BaseModel):
-    name: str
-    role: str = "member"
+    name: str = Field(max_length=50)
+    role: str = Field(default="member", max_length=20)
 
 
 class MemberRead(MemberCreate):
@@ -51,16 +51,16 @@ class MemberRead(MemberCreate):
 
 
 class DeviceCreate(BaseModel):
-    name: str
-    device_type: str
-    vendor: str | None = None
+    name: str = Field(max_length=100)
+    device_type: str = Field(max_length=30)
+    vendor: str | None = Field(default=None, max_length=50)
     room_id: int | None = None
 
 
 class DeviceUpdate(BaseModel):
-    name: str | None = None
-    device_type: str | None = None
-    vendor: str | None = None
+    name: str | None = Field(default=None, max_length=100)
+    device_type: str | None = Field(default=None, max_length=30)
+    vendor: str | None = Field(default=None, max_length=50)
     room_id: int | None = None
 
 
@@ -76,7 +76,7 @@ class DeviceRead(DeviceCreate):
 
 
 class DeviceEventCreate(BaseModel):
-    event_type: str
+    event_type: str = Field(max_length=30)
     payload: dict | None = None
 
 
@@ -94,8 +94,8 @@ class DeviceEventRead(DeviceEventCreate):
 
 class PreferenceCreate(BaseModel):
     member_id: int | None = None
-    pref_key: str
-    pref_value: str
+    pref_key: str = Field(max_length=100)
+    pref_value: str = Field(max_length=100)
 
 
 class PreferenceRead(PreferenceCreate):

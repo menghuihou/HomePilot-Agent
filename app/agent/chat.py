@@ -3,6 +3,7 @@
 主图流程：load_context -> route ->（chat 子图 | direct_reply）-> to_answer。
 """
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Annotated, TypedDict
 
@@ -20,9 +21,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.agent.context import HomeContext, resolve_home_context
 from app.agent.router import classify_intent, reply_for_intent, summarize_home_context
 from app.agent.state import AgentState
-from app.config import get_settings
 from app.database import session_factory
-from app.llm_client import build_chat_model, extract_text_content
+from app.llm_client import build_chat_model, default_model_name, extract_text_content
 from app.mcp.client import get_light_tools
 from app.models import Home, Preference
 
@@ -36,6 +36,8 @@ _CHAT_SYSTEM_PROMPT = """你是家庭智能助手「HomePilot」，用中文口�
   键格式为 device_alias:{{设备id}}（设备 id 见上下文设备列表），值就是称呼。
 - 用户表达其他需要记住的偏好时也可调用该工具，键用简短英文。
 - 只能使用上下文里列出的设备，不要编造。工具执行成功后，向用户确认记录结果。"""
+
+logger = logging.getLogger(__name__)
 
 
 class ChatState(TypedDict):
@@ -98,9 +100,7 @@ def build_chat_graph(
     async def _invoke_reply(bound_model, prompt_messages: list, config=None):
         response = await bound_model.ainvoke(prompt_messages, config=config)
         # with_structured_output / bind_tools 不回填模型名，这里手动补上。
-        get_client().update_current_generation(
-            model=get_settings().light_model or "claude-sonnet-4-5"
-        )
+        get_client().update_current_generation(model=default_model_name())
         return response
 
     async def reply(state: ChatState, config: RunnableConfig) -> dict:
@@ -152,8 +152,9 @@ def build_chat_graph(
                 outputs.append(
                     ToolMessage(content=str(result), tool_call_id=call["id"])
                 )
-            except Exception as exc:  # noqa: BLE001
-                # Server 崩溃等失败不中断对话：错误文本作为工具结果回给模型。
+            except Exception as exc:
+                # Server 崩溃等失败不中断对话；本地日志兜底观测链路不可用的场景。
+                logger.warning("MCP 工具 %s 调用失败", call["name"], exc_info=True)
                 outputs.append(
                     ToolMessage(content=f"工具调用失败：{exc}", tool_call_id=call["id"])
                 )
@@ -181,8 +182,8 @@ def build_agent_graph(router_model=None, chat_model=None, extra_tools_provider=N
             context = await resolve_home_context(state["home_id"], session)
         return {"home_context": context}
 
-    def route(state: AgentState) -> dict:
-        intent = classify_intent(
+    async def route(state: AgentState) -> dict:
+        intent = await classify_intent(
             state["messages"], state["home_context"], chat_model=router_model
         )
         return {"intent": intent}

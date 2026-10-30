@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
@@ -65,7 +66,15 @@ async def update_device(
     for field, value in changes.items():
         setattr(device, field, value)
 
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # 并发改名可能绕过应用层预检查；数据库唯一约束兜底为业务冲突。
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="device name already exists in this home",
+        ) from None
     await session.refresh(device)
     return device
 

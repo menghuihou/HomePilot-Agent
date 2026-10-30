@@ -49,7 +49,7 @@ def test_registers_exactly_three_tools_with_descriptions():
     for tool in tools:
         # 工具描述会进入动态发现结果，供 LLM 选择工具，必须完整。
         assert tool.description
-        assert "device_id" in tool.inputSchema["properties"]
+    assert "device_id" in tool.input_schema["properties"]
 
 
 def test_get_device_status_returns_simulated_state():
