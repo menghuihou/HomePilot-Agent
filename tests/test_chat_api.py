@@ -1,6 +1,7 @@
 """chat 接口测试：参数校验 422、家庭不存在 404、同步回答与 SSE 事件流。"""
 
 import json
+import uuid
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -97,6 +98,61 @@ def test_chat_stream_home_not_found_before_stream(client):
 
     assert resp.status_code == 404
     assert "text/event-stream" not in resp.headers.get("content-type", "")
+
+
+def test_chat_stream_rejects_blank_message(client):
+    resp = client.post("/chat/stream", json={"home_id": 1, "message": "   "})
+
+    assert resp.status_code == 422
+
+
+def test_chat_direct_reply_home_mode(client, home_id):
+    graph = build_agent_graph(
+        router_model=StubRouterModel("home_mode"),
+        chat_model=StubChatModel([]),
+    )
+    application.dependency_overrides[chat_api.get_agent_graph] = lambda: graph
+    try:
+        resp = client.post(
+            "/chat", json={"home_id": home_id, "message": "现在是什么模式"}
+        )
+    finally:
+        application.dependency_overrides.pop(chat_api.get_agent_graph, None)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "home_mode"
+    assert body["answer"] == "当前家庭模式是：normal。"
+
+
+def test_chat_multi_turn_accumulates_history(client, home_id):
+    """同一 thread_id 连发两轮：第二轮模型收到首轮问答，多轮上下文生效。"""
+    chat_model = StubChatModel(
+        [AIMessage(content="第一轮回复"), AIMessage(content="第二轮回复")]
+    )
+    graph = build_agent_graph(
+        router_model=StubRouterModel("chat"),
+        chat_model=chat_model,
+    )
+    application.dependency_overrides[chat_api.get_agent_graph] = lambda: graph
+    try:
+        thread_id = f"mt-{uuid.uuid4().hex}"
+        r1 = client.post(
+            "/chat",
+            json={"home_id": home_id, "message": "第一句话", "thread_id": thread_id},
+        )
+        r2 = client.post(
+            "/chat",
+            json={"home_id": home_id, "message": "第二句话", "thread_id": thread_id},
+        )
+    finally:
+        application.dependency_overrides.pop(chat_api.get_agent_graph, None)
+
+    assert r1.json()["answer"] == "第一轮回复"
+    assert r2.json()["answer"] == "第二轮回复"
+    # 首轮：system + 用户消息；次轮：system + 首轮问答 + 新用户消息
+    assert len(chat_model.received_messages[0]) == 2
+    assert len(chat_model.received_messages[1]) == 4
 
 
 def test_chat_stream_direct_reply_path(client, home_id):

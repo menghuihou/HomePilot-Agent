@@ -33,15 +33,20 @@ class StubRouterModel:
 
 
 class StubChatModel:
-    """按脚本回放 AIMessage 的工具调用桩；脚本耗尽即报错，兼做未调用断言。"""
+    """按脚本回放 AIMessage 的工具调用桩；脚本耗尽即报错，兼做未调用断言。
+
+    received_messages 记录每轮收到的消息列表，供多轮上下文断言使用。
+    """
 
     def __init__(self, responses: list[AIMessage]):
         self._responses = list(responses)
+        self.received_messages: list[list] = []
 
     def bind_tools(self, tools):
         return self
 
     async def ainvoke(self, messages, config=None):
+        self.received_messages.append(list(messages))
         return self._responses.pop(0)
 
 
