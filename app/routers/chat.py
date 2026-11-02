@@ -14,6 +14,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
+from langfuse import get_client
+from opentelemetry.trace import format_trace_id, get_current_span
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,11 +48,32 @@ class ChatResponse(BaseModel):
     answer: str
     intent: str
     thread_id: str
+    # 尽力获取：Langfuse 上下文不可用时为空串，前端据此省略展示。
+    trace_id: str = ""
 
 
 def get_agent_graph() -> Any:
     """依赖注入出口：测试用 dependency_overrides 替换为桩图。"""
     return agent_graph
+
+
+def _current_trace_id() -> str:
+    """尽力获取本次请求的 Langfuse trace id；拿不到返回空串。
+
+    必须在端点期调用（OTel server span 仍在上下文中）；流式生成器阶段
+    中间件上下文已退出，拿不到。
+    """
+    try:
+        trace_id = get_client().get_current_trace_id() or ""
+    except Exception:  # noqa: BLE001
+        trace_id = ""
+    if trace_id:
+        return trace_id
+    span = get_current_span()
+    span_context = span.get_span_context() if span is not None else None
+    if span_context is not None and span_context.is_valid:
+        return format_trace_id(span_context.trace_id)
+    return ""
 
 
 async def _get_home_or_404(home_id: int, session: AsyncSession) -> Home:
@@ -86,7 +109,10 @@ async def chat(
         config={"configurable": {"thread_id": thread_id}},
     )
     return ChatResponse(
-        answer=result["answer"], intent=result["intent"], thread_id=thread_id
+        answer=result["answer"],
+        intent=result["intent"],
+        thread_id=thread_id,
+        trace_id=_current_trace_id(),
     )
 
 
@@ -99,6 +125,7 @@ async def chat_stream(
     """SSE 流式回答：delta 推送回复 token，done 推送最终全文。"""
     await _get_home_or_404(payload.home_id, session)
     thread_id = payload.thread_id or f"web-{uuid4().hex}"
+    trace_id = _current_trace_id()
     config = {"configurable": {"thread_id": thread_id}}
 
     async def event_stream():
@@ -139,9 +166,6 @@ async def chat_stream(
                     yield _sse("tool_start", {"name": event.get("name", "")})
                 elif kind == "on_tool_end":
                     yield _sse("tool_end", {"name": event.get("name", "")})
-                elif kind == "on_chain_end" and node == "to_answer":
-                    output = event.get("data", {}).get("output") or {}
-                    final_answer = output.get("answer", "")
         except HTTPException as exc:
             yield _sse("error", {"message": str(exc.detail), "status": exc.status_code})
             return
@@ -150,6 +174,16 @@ async def chat_stream(
             logger.exception("chat stream 处理失败")
             yield _sse("error", {"message": f"处理失败：{exc}"})
             return
-        yield _sse("done", {"answer": final_answer or "".join(chunks)})
+        # 直接读最终状态：chat 与 direct_reply 两条路径都覆盖，
+        # 只靠 delta/to_answer 事件会漏掉非 chat 路径的答案。
+        try:
+            state = graph.get_state(config)
+            final_answer = (state.values or {}).get("answer", "") or final_answer
+        except Exception:  # noqa: BLE001
+            final_answer = final_answer or "".join(chunks)
+        yield _sse(
+            "done",
+            {"answer": final_answer or "".join(chunks), "trace_id": trace_id},
+        )
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

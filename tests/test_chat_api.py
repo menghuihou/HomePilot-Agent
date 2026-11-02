@@ -60,6 +60,8 @@ def test_chat_returns_answer_intent_and_thread_id(client, stub_graph, home_id):
     assert body["answer"] == "你好，我是家庭助手。"
     assert body["intent"] == "chat"
     assert body["thread_id"]
+    # trace_id 尽力而为：Langfuse 上下文可用时非空
+    assert "trace_id" in body
 
 
 def test_chat_echoes_existing_thread_id(client, stub_graph, home_id):
@@ -95,3 +97,27 @@ def test_chat_stream_home_not_found_before_stream(client):
 
     assert resp.status_code == 404
     assert "text/event-stream" not in resp.headers.get("content-type", "")
+
+
+def test_chat_stream_direct_reply_path(client, home_id):
+    """home_mode 等直答路径的 done 事件必须带完整答案（回归：曾漏 direct_reply）。"""
+    graph = build_agent_graph(
+        router_model=StubRouterModel("home_mode"),
+        chat_model=StubChatModel([]),
+    )
+    application.dependency_overrides[chat_api.get_agent_graph] = lambda: graph
+    try:
+        with client.stream(
+            "POST",
+            "/chat/stream",
+            json={"home_id": home_id, "message": "现在是什么模式"},
+        ) as response:
+            assert response.status_code == 200
+            text = "".join(response.iter_text())
+    finally:
+        application.dependency_overrides.pop(chat_api.get_agent_graph, None)
+
+    events = _parse_sse(text)
+
+    assert events[-1]["event"] == "done"
+    assert events[-1]["answer"] == "当前家庭模式是：normal。"

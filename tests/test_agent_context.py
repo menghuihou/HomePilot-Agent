@@ -68,7 +68,7 @@ def test_resolve_missing_home_raises_404(db_ready):
     assert exc_info.value.detail == "home not found"
 
 
-def test_seed_family_context():
+def test_seed_family_context(db_ready):
     """种子家庭已加载时验证 Resolver 输出；未加载种子数据则跳过。"""
 
     async def _run():
