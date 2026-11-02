@@ -122,6 +122,52 @@ def test_classify_falls_back_to_chat_on_invalid_output():
     )
 
 
+class NoneOutputRouterModel:
+    """模拟网关不调用结构化输出工具：ainvoke 返回 None 而非抛异常。"""
+
+    def with_structured_output(self, schema):
+        class _Structured:
+            async def ainvoke(self, messages):
+                return None
+
+        return _Structured()
+
+
+def test_router_none_output_falls_back_to_chat():
+    """with_structured_output 返回 None 时兜底 chat。
+
+    回归：曾直接取 None.intent 抛 AttributeError，Langfuse output 显示 undefined。
+    """
+
+    intent = asyncio.run(
+        classify_intent(
+            [HumanMessage(content="有没有成员叫小李的")],
+            _make_context(),
+            chat_model=NoneOutputRouterModel(),
+        )
+    )
+
+    assert intent == "chat"
+
+
+def test_router_merges_consecutive_humans_in_window():
+    """窗口末尾连续 human 消息合并为一条，消除 GLM 不调工具的触发形态。"""
+    model = StubChatModel(RouterDecision(intent="chat"))
+    messages = [
+        HumanMessage(content="hello，小p，可以帮我查询一下家里有多少成员吗"),
+        HumanMessage(content="有没有成员叫小李的"),
+    ]
+
+    asyncio.run(classify_intent(messages, _make_context(), chat_model=model))
+
+    sent = model.received_messages
+    assert sent[0].type == "system"
+    assert len(sent) == 2  # system + 合并后的单条 human
+    assert sent[1].content == (
+        "hello，小p，可以帮我查询一下家里有多少成员吗\n有没有成员叫小李的"
+    )
+
+
 def test_classify_injects_home_context_summary():
     model = StubChatModel(RouterDecision(intent="chat"))
 

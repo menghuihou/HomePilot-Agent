@@ -7,7 +7,7 @@ control / diagnose / inspect 返回占位回复，chat 交给 chat 子图。
 import logging
 from typing import Literal
 
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langfuse import get_client, observe
 from pydantic import BaseModel
 
@@ -90,9 +90,33 @@ def _dialog_window(messages: list[BaseMessage]) -> list[BaseMessage]:
     return dialog[-_CONTEXT_WINDOW:]
 
 
+def _merge_consecutive_humans(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """合并窗口内连续 human 消息。
+
+    用户连发多条或直答占位间隔后的历史会形成连续 human 序列，部分网关
+    （如 GLM）对此可能不调用结构化输出工具而直接文本回答，导致路由
+    结果为 None。合并成单条内容即可消除该触发形态。
+    """
+    merged: list[BaseMessage] = []
+    for message in messages:
+        if (
+            merged
+            and getattr(message, "type", "") == "human"
+            and getattr(merged[-1], "type", "") == "human"
+        ):
+            merged[-1] = HumanMessage(
+                content=f"{merged[-1].content}\n{message.content}"
+            )
+        else:
+            merged.append(message)
+    return merged
+
+
 @observe(as_type="generation", name="intent-router")
-async def _invoke_router(chat_model, prompt_messages: list) -> RouterDecision:
-    """调用 LLM 并解析为结构化意图；解析失败由 classify_intent 兜底。"""
+async def _invoke_router(
+    chat_model, prompt_messages: list
+) -> RouterDecision | None:
+    """调用 LLM 并解析为结构化意图；None/解析失败均由 classify_intent 兜底。"""
     decision = await chat_model.with_structured_output(RouterDecision).ainvoke(
         prompt_messages
     )
@@ -117,12 +141,20 @@ async def classify_intent(
     try:
         decision = await _invoke_router(
             model,
-            [SystemMessage(content=system_prompt), *_dialog_window(messages)],
+            [
+                SystemMessage(content=system_prompt),
+                *_merge_consecutive_humans(_dialog_window(messages)),
+            ],
         )
     except Exception:
         # 兜底边界：结构化解析失败、网关超时等多种异常类型都不应中断对话，
         # 统一降级为闲聊意图；本地日志兜底 Langfuse 不可用或未配置的场景。
         logger.warning("意图路由失败，已降级为 chat", exc_info=True)
+        return "chat"
+    if decision is None:
+        # 网关/模型未调用结构化输出工具时 with_structured_output 返回 None
+        # （而非抛异常），与解析失败同层兜底，避免 NoneType 崩溃。
+        logger.warning("意图路由未返回结构化结果，已降级为 chat")
         return "chat"
     return decision.intent
 

@@ -220,10 +220,11 @@ def test_router_window_sends_only_recent_dialog():
     sent = stub.received_messages[0]
     assert sent[0].type == "system"
     dialog = sent[1:]
-    assert len(dialog) == 6
+    # 连续 human 消息合并为一条转写文本（消除网关不调工具的触发形态）
+    assert len(dialog) == 1
     assert all(getattr(m, "type", "") in ("human", "ai") for m in dialog)
-    assert dialog[0].content == "消息2"
-    assert dialog[-1].content == "消息7"
+    for i in range(2, 8):
+        assert f"消息{i}" in dialog[0].content
 
 
 def test_router_without_human_message_falls_back_to_chat():
