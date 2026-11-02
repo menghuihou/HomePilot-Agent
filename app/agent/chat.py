@@ -7,7 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AnyMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langfuse import get_client, observe
@@ -195,9 +195,25 @@ def build_agent_graph(router_model=None, chat_model=None, extra_tools_provider=N
         # chat 路径必然以模型最终回复结尾，取最后一条消息正文即可。
         return {"answer": extract_text_content(state["messages"][-1].content)}
 
+    @observe(name="direct-reply")
+    def _direct_reply_observation(intent: str, reply: str) -> str:
+        """直答回复的观测点：非 LLM 路径的回复也进入当前请求 trace。
+
+        intent 不参与回复生成，仅作为观测入参留在 Langfuse input 里，
+        便于按意图筛选直答记录。
+        """
+        return reply
+
     def direct_reply(state: AgentState) -> dict:
+        reply = _direct_reply_observation(
+            state["intent"],
+            reply_for_intent(state["intent"], state["home_context"]) or "",
+        )
         return {
-            "answer": reply_for_intent(state["intent"], state["home_context"]) or ""
+            "answer": reply,
+            # 直答也追加 AI 消息：保持历史 human/ai 交替，避免连续
+            # human 消息干扰 Router 与 chat 子图的上下文。
+            "messages": [AIMessage(content=reply)],
         }
 
     builder = StateGraph(AgentState)

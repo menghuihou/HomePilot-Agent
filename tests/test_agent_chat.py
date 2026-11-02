@@ -5,28 +5,35 @@ LLM 全部用桩模型；数据库走真实本地库验证工具落库。
 
 import asyncio
 import uuid
+from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.agent.chat as agent_chat
 from app.agent.chat import build_agent_graph
-from app.agent.router import RouterDecision
+from app.agent.router import RouterDecision, classify_intent
 from app.config import get_settings
 
 
 class StubRouterModel:
-    """固定意图的结构化输出桩。"""
+    """固定意图的结构化输出桩。
+
+    received_messages 记录收到的 prompt 消息列表，供窗口切片断言使用。
+    """
 
     def __init__(self, intent: str):
         self._decision = RouterDecision(intent=intent)  # type: ignore[arg-type]
+        self.received_messages: list[list] = []
 
     def with_structured_output(self, schema):
         decision = self._decision
+        stub = self
 
         class _Structured:
             async def ainvoke(self, messages):
+                stub.received_messages.append(list(messages))
                 return decision
 
         return _Structured()
@@ -170,6 +177,8 @@ def test_home_mode_intent_replies_directly(client, home_id):
     result = _run_graph(home_id, "现在是什么模式", router_intent="home_mode")
 
     assert result["answer"] == "当前家庭模式是：normal。"
+    # 直答路径也要落 AI 消息，保持历史 human/ai 交替
+    assert any(getattr(m, "type", "") == "ai" for m in result["messages"])
 
 
 def test_placeholder_intent_replies_directly(client, home_id):
@@ -177,3 +186,55 @@ def test_placeholder_intent_replies_directly(client, home_id):
     result = _run_graph(home_id, "把灯打开", router_intent="control")
 
     assert "后续版本上线" in result["answer"]
+
+
+def _stub_home_context() -> SimpleNamespace:
+    """classify_intent 单测的最小上下文：只补 summarize 用到的属性。"""
+    return SimpleNamespace(
+        home=SimpleNamespace(name="测试家"),
+        current_mode="normal",
+        rooms=[],
+        members=[],
+        devices=[],
+        preferences=[],
+    )
+
+
+def test_router_window_sends_only_recent_dialog():
+    """窗口截断只发最近 6 条有正文的 human/ai 消息，过滤工具消息痕迹。
+
+    ToolMessage 与空正文 AI 消息进入窗口开头会被 Anthropic 协议拒绝，
+    导致 Router 静默降级 chat。
+    """
+    stub = StubRouterModel("chat")
+    messages = [HumanMessage(content=f"消息{i}") for i in range(8)]
+    # 在历史中间插入一轮工具调用痕迹，验证窗口过滤。
+    messages.insert(2, AIMessage(content="", tool_calls=[]))
+    messages.insert(3, ToolMessage(content="已记录偏好", tool_call_id="call_1"))
+
+    intent = asyncio.run(
+        classify_intent(messages, _stub_home_context(), chat_model=stub)
+    )
+
+    assert intent == "chat"
+    sent = stub.received_messages[0]
+    assert sent[0].type == "system"
+    dialog = sent[1:]
+    assert len(dialog) == 6
+    assert all(getattr(m, "type", "") in ("human", "ai") for m in dialog)
+    assert dialog[0].content == "消息2"
+    assert dialog[-1].content == "消息7"
+
+
+def test_router_without_human_message_falls_back_to_chat():
+    """历史里没有用户消息时不调 LLM，直接兜底 chat。"""
+    stub = StubRouterModel("control")
+
+    intent = asyncio.run(
+        classify_intent(
+            [AIMessage(content="早上好")], _stub_home_context(), chat_model=stub
+        )
+    )
+
+    assert intent == "chat"
+    assert stub.received_messages == []

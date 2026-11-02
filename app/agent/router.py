@@ -25,8 +25,14 @@ _SYSTEM_PROMPT_TEMPLATE = """你是智能家庭助手的意图路由器，只负
 - inspect：巡检全屋设备状态或索要家庭日报
 - home_mode：询问家庭当前模式
 
+只对【最后一条用户消息】进行分类；其余消息仅用于理解上下文
+（例如问题分多条发出、或指代前文），不要据此改变分类对象。
+
 当前家庭上下文（仅用于理解用户指代，不要向用户复述）：
 {home_summary}"""
+
+# Router 上下文窗口：带最近几条消息理解指代与拆句，同时控制 token 上限。
+_CONTEXT_WINDOW = 6
 
 # 后续周次实现的意图先统一返回占位文案，避免提前实现子图。
 _UNSUPPORTED_PLACEHOLDERS = {
@@ -61,6 +67,29 @@ def summarize_home_context(context: HomeContext) -> str:
     return "\n".join(lines)
 
 
+def _last_human_message(messages: list[BaseMessage]) -> BaseMessage | None:
+    """取最新一条用户消息；Router 只对它分类，避免历史消息干扰判断。"""
+    for message in reversed(messages):
+        if getattr(message, "type", "") == "human":
+            return message
+    return None
+
+
+def _dialog_window(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """Router 可见窗口：只保留有正文的 human/ai 消息。
+
+    过滤 ToolMessage 与空正文的 tool_calls AI 消息，避免窗口从中间截断后
+    以 tool_result 或 assistant 开头被 Anthropic 协议拒绝（首条消息必须是
+    user role，tool 消息必须紧跟对应 tool_use），静默降级 chat。
+    """
+    dialog = [
+        m
+        for m in messages
+        if getattr(m, "type", "") in ("human", "ai") and getattr(m, "content", "")
+    ]
+    return dialog[-_CONTEXT_WINDOW:]
+
+
 @observe(as_type="generation", name="intent-router")
 async def _invoke_router(chat_model, prompt_messages: list) -> RouterDecision:
     """调用 LLM 并解析为结构化意图；解析失败由 classify_intent 兜底。"""
@@ -78,13 +107,17 @@ async def classify_intent(
     chat_model=None,
 ) -> str:
     """判定用户消息意图；LLM 输出非法或调用失败时兜底为 chat。"""
+    target = _last_human_message(messages)
+    if target is None:
+        return "chat"
     model = chat_model or build_chat_model()
     system_prompt = _SYSTEM_PROMPT_TEMPLATE.format(
         home_summary=summarize_home_context(home_context)
     )
     try:
         decision = await _invoke_router(
-            model, [SystemMessage(content=system_prompt), *messages]
+            model,
+            [SystemMessage(content=system_prompt), *_dialog_window(messages)],
         )
     except Exception:
         # 兜底边界：结构化解析失败、网关超时等多种异常类型都不应中断对话，

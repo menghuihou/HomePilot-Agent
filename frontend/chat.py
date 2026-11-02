@@ -101,11 +101,14 @@ if prompt := st.chat_input("和助手聊聊，例如：把客厅灯叫主灯"):
     }
     captured: dict = {}
     with st.chat_message("assistant"):
-        full_answer = st.write_stream(_stream_reply(payload, captured))
+        streamed = st.write_stream(_stream_reply(payload, captured))
+        # 直答路径（home_mode / 占位回复）没有 delta 流：write_stream
+        # 渲染为空，用 done 事件的最终答案补齐，避免空气泡。
+        final_text = captured.get("answer") or streamed or ""
+        if not streamed and final_text:
+            st.markdown(final_text)
 
-    st.session_state.messages.append(
-        {"role": "assistant", "content": full_answer or captured.get("answer", "")}
-    )
+    st.session_state.messages.append({"role": "assistant", "content": final_text})
     if captured.get("error"):
         st.error(captured["error"])
     if captured.get("trace_id"):
