@@ -51,7 +51,7 @@ def _run_agent(graph, home_id: int, text: str, on_finish=None):
         patch.undo()
 
 
-def test_discovers_three_light_tools():
+def test_discovers_all_light_domain_tools():
     mcp_client = _make_client()
 
     async def _run():
@@ -66,8 +66,14 @@ def test_discovers_three_light_tools():
         "get_device_status",
         "turn_light_on",
         "turn_light_off",
+        "restart_gateway",
     }
     assert all(t.description for t in tools)
+
+    # 审批演示主路径：诊断子图在审批通过后调用的高风险网关工具
+    # 必须能被动态发现。
+    gateway_tool = next(t for t in tools if t.name == "restart_gateway")
+    assert "风险等级：high" in gateway_tool.description
 
 
 def test_converted_tool_calls_server():

@@ -12,12 +12,15 @@ from mcp_servers import light_server
 
 
 @pytest.fixture(autouse=True)
-def _restore_lights():
-    """每个用例结束后还原模拟设备表，避免用例间状态串扰。"""
+def _restore_simulated_state():
+    """每个用例结束后还原模拟设备与网关状态，避免用例间状态串扰。"""
     snapshot = copy.deepcopy(light_server._LIGHTS)
+    gateway_snapshot = copy.deepcopy(light_server._GATEWAY)
     yield
     light_server._LIGHTS.clear()
     light_server._LIGHTS.update(snapshot)
+    light_server._GATEWAY.clear()
+    light_server._GATEWAY.update(gateway_snapshot)
 
 
 def _call(name: str, args: dict):
@@ -34,7 +37,7 @@ def asyncio_run(coro):
     return asyncio.run(coro)
 
 
-def test_registers_exactly_three_tools_with_descriptions():
+def test_registers_exactly_four_tools_with_risk_levels():
     async def _run():
         async with Client(light_server.mcp) as client:
             return await client.list_tools()
@@ -45,11 +48,20 @@ def test_registers_exactly_three_tools_with_descriptions():
         "get_device_status",
         "turn_light_on",
         "turn_light_off",
+        "restart_gateway",
+    }
+
+    # 风险等级写入工具描述，随动态发现暴露给 LLM 做展示参考；
+    # 审批门控的唯一依据是 repo 规则表，这里只锁定描述标注。
+    expected_levels = {
+        "get_device_status": "low",
+        "turn_light_on": "low",
+        "turn_light_off": "low",
+        "restart_gateway": "high",
     }
     for tool in tools:
-        # 工具描述会进入动态发现结果，供 LLM 选择工具，必须完整。
         assert tool.description
-    assert "device_id" in tool.input_schema["properties"]
+        assert f"风险等级：{expected_levels[tool.name]}" in tool.description, tool.name
 
 
 def test_get_device_status_returns_simulated_state():
@@ -86,3 +98,19 @@ def test_unknown_device_returns_explicit_error():
 
     message = _call("turn_light_on", {"device_id": "nope"})
     assert "错误" in message
+
+
+def test_restart_gateway_success():
+    message = _call("restart_gateway", {"gateway_id": "gateway-1"})
+
+    assert "重启成功" in message
+    assert light_server._GATEWAY["restarts"] == 1
+    assert light_server._GATEWAY["online"] is True
+
+
+def test_restart_gateway_unknown_id_returns_explicit_error():
+    message = _call("restart_gateway", {"gateway_id": "nope"})
+
+    assert "不存在" in message
+    assert "gateway-1" in message
+    assert light_server._GATEWAY["restarts"] == 0
