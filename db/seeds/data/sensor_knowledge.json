@@ -1,0 +1,581 @@
+{
+  "device_type": "sensor",
+  "symptoms": [
+    {"symptom_key": "sensor_offline", "description": "传感器在 App 中显示离线"},
+    {"symptom_key": "sensor_no_data", "description": "完全无数据上报"},
+    {"symptom_key": "sensor_data_stuck", "description": "数据长时间保持不变"},
+    {"symptom_key": "sensor_value_drift", "description": "数值漂移超出合理范围"},
+    {"symptom_key": "sensor_false_alarm", "description": "无真实异常却频繁报警"},
+    {"symptom_key": "sensor_missed_event", "description": "真实事件发生却未触发联动"},
+    {"symptom_key": "sensor_battery_low", "description": "电量快速耗尽或频繁低电提醒"},
+    {"symptom_key": "sensor_motion_fail", "description": "人体感应失灵"},
+    {"symptom_key": "sensor_door_fail", "description": "门窗开合检测失灵"},
+    {"symptom_key": "sensor_water_fail", "description": "水浸检测误报或漏报"},
+    {"symptom_key": "sensor_temp_humi_inaccurate", "description": "温湿度读数不准"},
+    {"symptom_key": "sensor_pair_fail", "description": "配对或入网失败"},
+    {"symptom_key": "sensor_report_delay", "description": "数据上报明显延迟"},
+    {"symptom_key": "sensor_duplicate_report", "description": "同一事件重复上报"}
+  ],
+  "causes": [
+    {
+      "cause_key": "battery_dead",
+      "cause_name": "电池耗尽",
+      "description": "电池电量耗尽，传感器彻底停止工作。",
+      "prevalence": 0.2,
+      "investigation_weight": 5,
+      "fix_action": "replace_battery",
+      "fix_suggestion": "更换同型号电池后确认设备上线。"
+    },
+    {
+      "cause_key": "battery_contact_loose",
+      "cause_name": "电池接触不良",
+      "description": "电池触点氧化或松动，供电时断时续。",
+      "prevalence": 0.08,
+      "investigation_weight": 4,
+      "fix_action": "reseat_battery",
+      "fix_suggestion": "重新安装电池并清洁触点。"
+    },
+    {
+      "cause_key": "low_battery_degrade",
+      "cause_name": "低电量功能降级",
+      "description": "低电量时传感器自动降低上报频率，数据滞后或漏报。",
+      "prevalence": 0.1,
+      "investigation_weight": 4,
+      "fix_action": "replace_battery",
+      "fix_suggestion": "更换电池恢复正常上报频率。"
+    },
+    {
+      "cause_key": "weak_signal",
+      "cause_name": "无线信号弱",
+      "description": "传感器位置信号弱，上报丢失或延迟。",
+      "prevalence": 0.12,
+      "investigation_weight": 4,
+      "fix_action": "improve_signal",
+      "fix_suggestion": "调整网关位置或增加中继节点。"
+    },
+    {
+      "cause_key": "gateway_offline",
+      "cause_name": "网关离线",
+      "description": "家庭网关离线，接入网关的传感器全部失联。",
+      "prevalence": 0.15,
+      "investigation_weight": 5,
+      "fix_action": "restart_gateway",
+      "fix_suggestion": "重启网关恢复设备接入。"
+    },
+    {
+      "cause_key": "zigbee_interference",
+      "cause_name": "Zigbee信道干扰",
+      "description": "同频段干扰导致丢包，通信不稳定。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "change_channel",
+      "fix_suggestion": "调整网关信道避开干扰源。"
+    },
+    {
+      "cause_key": "wifi_disconnected",
+      "cause_name": "WiFi断连",
+      "description": "WiFi 型传感器断网，数据无法上传。",
+      "prevalence": 0.08,
+      "investigation_weight": 4,
+      "fix_action": "rebind_wifi",
+      "fix_suggestion": "重新配置传感器网络连接。"
+    },
+    {
+      "cause_key": "firmware_fault",
+      "cause_name": "固件异常",
+      "description": "固件运行异常，出现数据冻结或重复上报。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "重启传感器并升级稳定版固件。"
+    },
+    {
+      "cause_key": "firmware_update_interrupted",
+      "cause_name": "升级中断损坏",
+      "description": "固件升级中途断电，设备无法正常启动。",
+      "prevalence": 0.02,
+      "investigation_weight": 1,
+      "fix_action": "repair_firmware",
+      "fix_suggestion": "按说明书进入恢复模式重刷固件。"
+    },
+    {
+      "cause_key": "humidity_drift",
+      "cause_name": "湿度校准漂移",
+      "description": "湿度元件校准漂移，读数长期偏高或偏低。",
+      "prevalence": 0.1,
+      "investigation_weight": 3,
+      "fix_action": "recalibrate_sensor",
+      "fix_suggestion": "用参照仪器校准湿度偏移量。"
+    },
+    {
+      "cause_key": "element_aging",
+      "cause_name": "传感元件老化",
+      "description": "传感元件老化，灵敏度与精度持续下降。",
+      "prevalence": 0.06,
+      "investigation_weight": 2,
+      "fix_action": "replace_sensor_unit",
+      "fix_suggestion": "更换传感器整机。"
+    },
+    {
+      "cause_key": "probe_contaminated",
+      "cause_name": "探头污染",
+      "description": "探头表面积灰或覆膜，测量失真。",
+      "prevalence": 0.07,
+      "investigation_weight": 4,
+      "fix_action": "clean_probe",
+      "fix_suggestion": "按说明书清洁探头后复测。"
+    },
+    {
+      "cause_key": "placement_poor",
+      "cause_name": "安装位置不当",
+      "description": "安装位置缺乏代表性，数据失真或误触发。",
+      "prevalence": 0.1,
+      "investigation_weight": 4,
+      "fix_action": "reposition_sensor",
+      "fix_suggestion": "按说明书建议位置重新安装。"
+    },
+    {
+      "cause_key": "sunlight_exposure",
+      "cause_name": "阳光直射",
+      "description": "阳光直射测温元件，白天读数异常偏高。",
+      "prevalence": 0.07,
+      "investigation_weight": 4,
+      "fix_action": "reposition_sensor",
+      "fix_suggestion": "移至无直射位置安装。"
+    },
+    {
+      "cause_key": "near_heat_source",
+      "cause_name": "贴近热源",
+      "description": "靠近暖气或电器热源，读数偏高且易误报。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "reposition_sensor",
+      "fix_suggestion": "远离热源重新安装。"
+    },
+    {
+      "cause_key": "door_magnet_gap",
+      "cause_name": "门窗磁间距过大",
+      "description": "门磁主体与磁铁间距超标，开合检测不到。",
+      "prevalence": 0.12,
+      "investigation_weight": 5,
+      "fix_action": "adjust_gap",
+      "fix_suggestion": "缩小主副件间距至规格范围内。"
+    },
+    {
+      "cause_key": "magnet_detached",
+      "cause_name": "磁铁脱落",
+      "description": "门磁副件磁铁脱落，开合状态不再变化。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "replace_magnet",
+      "fix_suggestion": "重新粘贴或更换磁铁副件。"
+    },
+    {
+      "cause_key": "pir_blocked",
+      "cause_name": "PIR视野被遮挡",
+      "description": "人体感应窗口被遮挡，探测区域失效。",
+      "prevalence": 0.1,
+      "investigation_weight": 5,
+      "fix_action": "clear_pir_view",
+      "fix_suggestion": "清理感应窗口前的遮挡物。"
+    },
+    {
+      "cause_key": "pir_temp_comp_fail",
+      "cause_name": "PIR温度补偿失效",
+      "description": "高温环境人体温差变小，感应灵敏度下降。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "replace_sensor_unit",
+      "fix_suggestion": "更换带温度补偿的传感器或调整安装角。"
+    },
+    {
+      "cause_key": "pet_false_trigger",
+      "cause_name": "宠物误触发",
+      "description": "宠物活动触发人体感应，造成频繁误报。",
+      "prevalence": 0.08,
+      "investigation_weight": 4,
+      "fix_action": "adjust_sensitivity",
+      "fix_suggestion": "调低灵敏度或改用宠物防误报模式。"
+    },
+    {
+      "cause_key": "curtain_airflow",
+      "cause_name": "窗帘风扇气流扰动",
+      "description": "窗帘飘动或风扇气流被误判为人体移动。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "reposition_sensor",
+      "fix_suggestion": "调整安装角度避开气流干扰源。"
+    },
+    {
+      "cause_key": "water_probe_corroded",
+      "cause_name": "水浸探头腐蚀",
+      "description": "水浸探头触点腐蚀，检测失灵。",
+      "prevalence": 0.06,
+      "investigation_weight": 3,
+      "fix_action": "replace_probe",
+      "fix_suggestion": "更换水浸探头配件。"
+    },
+    {
+      "cause_key": "water_probe_detached",
+      "cause_name": "水浸探头未连接",
+      "description": "外接水浸探头脱落，检测回路断开。",
+      "prevalence": 0.04,
+      "investigation_weight": 4,
+      "fix_action": "reattach_probe",
+      "fix_suggestion": "重新接好水浸探头并测试。"
+    },
+    {
+      "cause_key": "dew_false_alarm",
+      "cause_name": "冷凝露水误报",
+      "description": "高湿环境探头结露，被误判为水浸。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "reposition_sensor",
+      "fix_suggestion": "将探头移至不易结露的位置。"
+    },
+    {
+      "cause_key": "high_report_rate_drain",
+      "cause_name": "上报频率过高耗电",
+      "description": "上报间隔设置过短，电池消耗异常加快。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "调大上报间隔，平衡实时性与续航。"
+    },
+    {
+      "cause_key": "wake_strategy_fault",
+      "cause_name": "唤醒策略异常",
+      "description": "休眠唤醒机制异常，事件上报延迟或丢失。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "升级固件修复唤醒策略。"
+    },
+    {
+      "cause_key": "timestamp_drift",
+      "cause_name": "设备时间漂移",
+      "description": "设备时钟漂移，事件时间戳错乱造成重复告警。",
+      "prevalence": 0.03,
+      "investigation_weight": 3,
+      "fix_action": "sync_time",
+      "fix_suggestion": "重启设备同步时间后观察。"
+    },
+    {
+      "cause_key": "cache_not_refreshed",
+      "cause_name": "App缓存未刷新",
+      "description": "App 端数据缓存未刷新，误以为数据冻结。",
+      "prevalence": 0.08,
+      "investigation_weight": 5,
+      "fix_action": "refresh_app",
+      "fix_suggestion": "刷新设备页面或重启 App。"
+    },
+    {
+      "cause_key": "report_interval_long",
+      "cause_name": "上报周期过长",
+      "description": "上报周期配置过长，数据更新显得滞后。",
+      "prevalence": 0.07,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "按需缩短上报周期。"
+    },
+    {
+      "cause_key": "pair_timeout",
+      "cause_name": "配对超时",
+      "description": "配对窗口内未完成入网，流程超时失败。",
+      "prevalence": 0.1,
+      "investigation_weight": 4,
+      "fix_action": "pair_device",
+      "fix_suggestion": "靠近网关重新触发配对流程。"
+    },
+    {
+      "cause_key": "paired_elsewhere",
+      "cause_name": "设备已绑定其他网关",
+      "description": "传感器仍绑定在旧网关，无法加入新网关。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "unbind_first",
+      "fix_suggestion": "先在原网关解绑，再重新配对。"
+    },
+    {
+      "cause_key": "device_asleep",
+      "cause_name": "设备深度休眠",
+      "description": "电池设备深度休眠，配对与上报均需先唤醒。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "wake_device",
+      "fix_suggestion": "按说明书按键唤醒设备后重试。"
+    },
+    {
+      "cause_key": "key_invalid",
+      "cause_name": "安全密钥失效",
+      "description": "入网密钥失效，设备被网关拒绝接入。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "pair_device",
+      "fix_suggestion": "重置设备后重新配对入网。"
+    },
+    {
+      "cause_key": "account_unbound",
+      "cause_name": "账号未绑定",
+      "description": "设备未绑定到当前账号，数据不可见。",
+      "prevalence": 0.04,
+      "investigation_weight": 4,
+      "fix_action": "rebind_account",
+      "fix_suggestion": "在 App 中重新绑定设备。"
+    },
+    {
+      "cause_key": "cloud_rule_missing",
+      "cause_name": "云端联动规则未下发",
+      "description": "联动规则未同步到云端，事件触发无动作。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "update_scene",
+      "fix_suggestion": "重新保存联动规则并下发。"
+    },
+    {
+      "cause_key": "local_scene_fail",
+      "cause_name": "本地联动失效",
+      "description": "本地联动引擎异常，网关侧规则不执行。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "update_scene",
+      "fix_suggestion": "重启网关并重下本地联动规则。"
+    },
+    {
+      "cause_key": "router_node_fault",
+      "cause_name": "中继节点故障",
+      "description": "Zigbee 路由中继节点故障，下游传感器通信受阻。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "restart_router_node",
+      "fix_suggestion": "重启中继节点设备。"
+    },
+    {
+      "cause_key": "mesh_rebuild",
+      "cause_name": "网络重建中",
+      "description": "Mesh 网络重建路由，通信短暂不稳。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "wait_service",
+      "fix_suggestion": "等待网络自愈完成。"
+    },
+    {
+      "cause_key": "emi_interference",
+      "cause_name": "电磁干扰",
+      "description": "大功率电器电磁干扰，模拟量读数抖动。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "relocate_sensor",
+      "fix_suggestion": "远离干扰源安装或加屏蔽措施。"
+    },
+    {
+      "cause_key": "metal_shielding",
+      "cause_name": "金属外壳屏蔽",
+      "description": "安装在金属柜体内，无线信号被屏蔽。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "reposition_sensor",
+      "fix_suggestion": "移出金属屏蔽环境或外置天线。"
+    },
+    {
+      "cause_key": "moisture_ingress",
+      "cause_name": "潮气侵入",
+      "description": "密封失效进潮，读数漂移且易误报。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "replace_sensor_unit",
+      "fix_suggestion": "更换设备并改善安装环境防潮。"
+    },
+    {
+      "cause_key": "temp_out_of_range",
+      "cause_name": "超出工作温湿度",
+      "description": "环境超出设计量程，数据失真或设备保护停机。",
+      "prevalence": 0.03,
+      "investigation_weight": 3,
+      "fix_action": "reposition_sensor",
+      "fix_suggestion": "移至规格范围内环境安装。"
+    },
+    {
+      "cause_key": "drop_damage",
+      "cause_name": "跌落损坏",
+      "description": "跌落导致内部损坏，读数异常或不工作。",
+      "prevalence": 0.03,
+      "investigation_weight": 1,
+      "fix_action": "replace_sensor_unit",
+      "fix_suggestion": "更换损坏的传感器。"
+    },
+    {
+      "cause_key": "adc_sampling_fault",
+      "cause_name": "采样电路异常",
+      "description": "内部采样电路故障，数值冻结或跳变。",
+      "prevalence": 0.02,
+      "investigation_weight": 1,
+      "fix_action": "replace_sensor_unit",
+      "fix_suggestion": "更换传感器整机。"
+    },
+    {
+      "cause_key": "calibration_lost",
+      "cause_name": "校准参数丢失",
+      "description": "断电或复位后校准参数丢失，读数系统性偏移。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "recalibrate_sensor",
+      "fix_suggestion": "重新执行校准流程。"
+    },
+    {
+      "cause_key": "factory_mode_left_on",
+      "cause_name": "出厂演示模式未退出",
+      "description": "出厂演示模式未退出，数据固定不变。",
+      "prevalence": 0.02,
+      "investigation_weight": 4,
+      "fix_action": "exit_factory_mode",
+      "fix_suggestion": "按说明书退出演示模式。"
+    },
+    {
+      "cause_key": "threshold_misconfig",
+      "cause_name": "报警阈值配置错误",
+      "description": "阈值过灵敏或过宽，误报或漏报。",
+      "prevalence": 0.09,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "按实际环境调整报警阈值。"
+    },
+    {
+      "cause_key": "unit_misconfig",
+      "cause_name": "单位配置错误",
+      "description": "单位或精度配置错误，读数换算后显得异常。",
+      "prevalence": 0.03,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "核对单位与精度设置。"
+    },
+    {
+      "cause_key": "duplicate_dispatch",
+      "cause_name": "平台重复下发",
+      "description": "平台指令去重失败，同一事件被重复推送。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "升级平台接入固件修复去重逻辑。"
+    },
+    {
+      "cause_key": "watchdog_reset",
+      "cause_name": "看门狗复位",
+      "description": "固件异常触发看门狗复位，重新入网时重复上报。",
+      "prevalence": 0.02,
+      "investigation_weight": 2,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "升级固件并观察复位日志。"
+    },
+    {
+      "cause_key": "battery_type_mismatch",
+      "cause_name": "电池型号不匹配",
+      "description": "使用了电压不符的电池，供电异常且告警频繁。",
+      "prevalence": 0.04,
+      "investigation_weight": 4,
+      "fix_action": "replace_battery",
+      "fix_suggestion": "更换为说明书指定型号电池。"
+    },
+    {
+      "cause_key": "antenna_damage",
+      "cause_name": "天线损坏",
+      "description": "内置天线损坏，通信距离骤降。",
+      "prevalence": 0.02,
+      "investigation_weight": 1,
+      "fix_action": "replace_sensor_unit",
+      "fix_suggestion": "更换传感器整机。"
+    }
+  ],
+  "symptom_causes": [
+    {
+      "symptom": "sensor_offline",
+      "causes": [
+        "battery_dead", "battery_contact_loose", "weak_signal", "gateway_offline",
+        "zigbee_interference", "wifi_disconnected", "firmware_update_interrupted",
+        "router_node_fault", "mesh_rebuild", "key_invalid", "temp_out_of_range",
+        "watchdog_reset", "battery_type_mismatch", "antenna_damage"
+      ]
+    },
+    {
+      "symptom": "sensor_no_data",
+      "causes": [
+        "battery_dead", "battery_contact_loose", "gateway_offline",
+        "firmware_update_interrupted", "device_asleep", "account_unbound",
+        "drop_damage", "factory_mode_left_on"
+      ]
+    },
+    {
+      "symptom": "sensor_data_stuck",
+      "causes": [
+        "low_battery_degrade", "firmware_fault", "cache_not_refreshed",
+        "report_interval_long", "adc_sampling_fault", "factory_mode_left_on"
+      ]
+    },
+    {
+      "symptom": "sensor_value_drift",
+      "causes": [
+        "element_aging", "placement_poor", "sunlight_exposure", "near_heat_source",
+        "emi_interference", "temp_out_of_range", "adc_sampling_fault",
+        "calibration_lost", "unit_misconfig"
+      ]
+    },
+    {
+      "symptom": "sensor_false_alarm",
+      "causes": [
+        "firmware_fault", "placement_poor", "sunlight_exposure", "near_heat_source",
+        "pet_false_trigger", "curtain_airflow", "dew_false_alarm", "timestamp_drift",
+        "emi_interference", "moisture_ingress", "drop_damage", "threshold_misconfig"
+      ]
+    },
+    {
+      "symptom": "sensor_missed_event",
+      "causes": [
+        "low_battery_degrade", "element_aging", "door_magnet_gap", "magnet_detached",
+        "pir_blocked", "curtain_airflow", "wake_strategy_fault", "cloud_rule_missing",
+        "local_scene_fail", "threshold_misconfig"
+      ]
+    },
+    {
+      "symptom": "sensor_battery_low",
+      "causes": ["battery_contact_loose", "high_report_rate_drain", "battery_type_mismatch"]
+    },
+    {
+      "symptom": "sensor_motion_fail",
+      "causes": ["placement_poor", "pir_blocked", "pir_temp_comp_fail", "curtain_airflow"]
+    },
+    {
+      "symptom": "sensor_door_fail",
+      "causes": ["door_magnet_gap", "magnet_detached"]
+    },
+    {
+      "symptom": "sensor_water_fail",
+      "causes": [
+        "probe_contaminated", "water_probe_corroded", "water_probe_detached",
+        "dew_false_alarm", "moisture_ingress"
+      ]
+    },
+    {
+      "symptom": "sensor_temp_humi_inaccurate",
+      "causes": [
+        "humidity_drift", "element_aging", "probe_contaminated", "sunlight_exposure",
+        "near_heat_source", "moisture_ingress", "calibration_lost"
+      ]
+    },
+    {
+      "symptom": "sensor_pair_fail",
+      "causes": ["pair_timeout", "paired_elsewhere", "device_asleep", "key_invalid"]
+    },
+    {
+      "symptom": "sensor_report_delay",
+      "causes": [
+        "low_battery_degrade", "weak_signal", "zigbee_interference", "wifi_disconnected",
+        "wake_strategy_fault", "report_interval_long", "router_node_fault",
+        "mesh_rebuild", "device_asleep", "metal_shielding", "antenna_damage"
+      ]
+    },
+    {
+      "symptom": "sensor_duplicate_report",
+      "causes": ["firmware_fault", "timestamp_drift", "duplicate_dispatch", "watchdog_reset"]
+    }
+  ]
+}

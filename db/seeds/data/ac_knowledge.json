@@ -1,0 +1,623 @@
+{
+  "device_type": "ac",
+  "symptoms": [
+    {"symptom_key": "ac_not_cooling", "description": "制冷效果差或不制冷"},
+    {"symptom_key": "ac_not_heating", "description": "制热效果差或不制热"},
+    {"symptom_key": "ac_no_air", "description": "不出风或风量很小"},
+    {"symptom_key": "ac_leaking_water", "description": "室内机漏水"},
+    {"symptom_key": "ac_noise", "description": "运行噪音明显增大"},
+    {"symptom_key": "ac_odor", "description": "出风有异味"},
+    {"symptom_key": "ac_offline", "description": "设备在 App 中离线"},
+    {"symptom_key": "ac_temp_inaccurate", "description": "显示温度与体感明显不符"},
+    {"symptom_key": "ac_short_cycling", "description": "频繁启停"},
+    {"symptom_key": "ac_remote_fail", "description": "遥控器控制失效"},
+    {"symptom_key": "ac_energy_spike", "description": "能耗异常升高"},
+    {"symptom_key": "ac_freezing", "description": "蒸发器或管路结霜"},
+    {"symptom_key": "ac_display_fault", "description": "面板显示异常或报错代码"},
+    {"symptom_key": "ac_auto_mode_switch", "description": "模式未经操作自行切换"}
+  ],
+  "causes": [
+    {
+      "cause_key": "refrigerant_leak",
+      "cause_name": "制冷剂泄漏",
+      "description": "制冷系统泄漏，冷量不足导致制冷效果差并可能结霜。",
+      "prevalence": 0.08,
+      "investigation_weight": 1,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师检漏补氟，不建议自行处理。"
+    },
+    {
+      "cause_key": "refrigerant_low",
+      "cause_name": "制冷剂不足",
+      "description": "系统冷媒量偏低，制冷制热能力同步衰减且能耗上升。",
+      "prevalence": 0.07,
+      "investigation_weight": 1,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师补充冷媒并排查泄漏点。"
+    },
+    {
+      "cause_key": "compressor_fault",
+      "cause_name": "压缩机故障",
+      "description": "压缩机性能衰减或损坏，无法建立有效压差。",
+      "prevalence": 0.05,
+      "investigation_weight": 1,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师检修压缩机。"
+    },
+    {
+      "cause_key": "compressor_capacitor_fault",
+      "cause_name": "压缩机电容损坏",
+      "description": "启动电容失效，压缩机启动困难导致频繁启停。",
+      "prevalence": 0.05,
+      "investigation_weight": 2,
+      "fix_action": "replace_capacitor",
+      "fix_suggestion": "更换同规格启动电容，建议由专业人员操作。"
+    },
+    {
+      "cause_key": "four_way_valve_fault",
+      "cause_name": "四通阀故障",
+      "description": "四通换向阀卡滞，制冷制热切换失效。",
+      "prevalence": 0.03,
+      "investigation_weight": 1,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师检修四通阀。"
+    },
+    {
+      "cause_key": "evaporator_frost",
+      "cause_name": "蒸发器结霜",
+      "description": "蒸发器结霜堵塞风道，出风变小且制冷下降。",
+      "prevalence": 0.06,
+      "investigation_weight": 3,
+      "fix_action": "wait_defrost",
+      "fix_suggestion": "停机化霜后清洗滤网再观察。"
+    },
+    {
+      "cause_key": "condenser_dirty",
+      "cause_name": "冷凝器脏堵",
+      "description": "外机冷凝器积灰脏堵，换热效率下降。",
+      "prevalence": 0.1,
+      "investigation_weight": 4,
+      "fix_action": "clean_condenser",
+      "fix_suggestion": "清洗外机冷凝器翅片。"
+    },
+    {
+      "cause_key": "filter_clogged",
+      "cause_name": "滤网堵塞",
+      "description": "滤网积尘堵塞，风量下降且制冷衰减、可能产生异味。",
+      "prevalence": 0.15,
+      "investigation_weight": 5,
+      "fix_action": "clean_filter",
+      "fix_suggestion": "取出滤网清洗晾干后装回。"
+    },
+    {
+      "cause_key": "fan_motor_fault",
+      "cause_name": "内机风扇电机故障",
+      "description": "内机风扇电机损坏或卡滞，不出风或有异常噪音。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "replace_fan_motor",
+      "fix_suggestion": "更换风扇电机，建议售后处理。"
+    },
+    {
+      "cause_key": "fan_capacitor_fault",
+      "cause_name": "风机电容故障",
+      "description": "风机电容失效，风机启动困难或不转。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "replace_capacitor",
+      "fix_suggestion": "更换风机电容，建议由专业人员操作。"
+    },
+    {
+      "cause_key": "drain_pump_fault",
+      "cause_name": "排水泵故障",
+      "description": "排水泵损坏，冷凝水无法排出而溢出。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "replace_drain_pump",
+      "fix_suggestion": "更换排水泵，建议售后处理。"
+    },
+    {
+      "cause_key": "drain_pipe_clog",
+      "cause_name": "排水管堵塞",
+      "description": "排水管被灰尘或异物堵塞，冷凝水倒灌漏水。",
+      "prevalence": 0.12,
+      "investigation_weight": 4,
+      "fix_action": "clear_drain",
+      "fix_suggestion": "疏通排水管并冲洗确认畅通。"
+    },
+    {
+      "cause_key": "water_pan_cracked",
+      "cause_name": "接水盘破裂",
+      "description": "接水盘开裂，冷凝水直接渗漏。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "replace_water_pan",
+      "fix_suggestion": "更换接水盘。"
+    },
+    {
+      "cause_key": "installation_tilt",
+      "cause_name": "内机安装倾斜",
+      "description": "内机安装不水平，冷凝水越过排水口外溢。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "reinstall_unit",
+      "fix_suggestion": "重新调整内机水平度。"
+    },
+    {
+      "cause_key": "temp_sensor_fault",
+      "cause_name": "温度传感器故障",
+      "description": "室温采样失真，控温与模式判断错乱。",
+      "prevalence": 0.05,
+      "investigation_weight": 2,
+      "fix_action": "replace_sensor",
+      "fix_suggestion": "更换温度传感器，建议售后处理。"
+    },
+    {
+      "cause_key": "pipe_sensor_fault",
+      "cause_name": "管温传感器故障",
+      "description": "管温检测异常，误判结霜或触发保护性启停。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "replace_sensor",
+      "fix_suggestion": "更换管温传感器，建议售后处理。"
+    },
+    {
+      "cause_key": "main_board_fault",
+      "cause_name": "主控板故障",
+      "description": "主控板异常，多个功能同时失效或误动作。",
+      "prevalence": 0.03,
+      "investigation_weight": 1,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师检修主控板。"
+    },
+    {
+      "cause_key": "display_board_fault",
+      "cause_name": "显示板故障",
+      "description": "显示板损坏，面板显示乱码或不亮但运行正常。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "replace_display",
+      "fix_suggestion": "更换显示板组件。"
+    },
+    {
+      "cause_key": "voltage_abnormal",
+      "cause_name": "电源电压异常",
+      "description": "供电电压过高或过低，触发保护性停机。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "check_voltage",
+      "fix_suggestion": "检查供电电压，必要时安装稳压器。"
+    },
+    {
+      "cause_key": "low_pressure_protection",
+      "cause_name": "低压保护停机",
+      "description": "系统低压触发保护，反复启停且不制冷。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师排查缺氟或堵塞。"
+    },
+    {
+      "cause_key": "high_pressure_protection",
+      "cause_name": "高压保护停机",
+      "description": "冷凝压力过高触发保护，多与外机散热差有关。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "clean_condenser",
+      "fix_suggestion": "清洗外机改善散热后再观察。"
+    },
+    {
+      "cause_key": "overcurrent_protection",
+      "cause_name": "过流保护",
+      "description": "运行电流超限触发保护停机。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师检测电流与负载。"
+    },
+    {
+      "cause_key": "comm_wire_fault",
+      "cause_name": "内外机通讯线故障",
+      "description": "通讯线破损或接插件松动，内外机通信中断。",
+      "prevalence": 0.03,
+      "investigation_weight": 1,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师检修通讯线路。"
+    },
+    {
+      "cause_key": "indoor_outdoor_comm_fault",
+      "cause_name": "内外机通讯异常",
+      "description": "通讯干扰或模块故障，内外机状态同步出错。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师检测通讯模块。"
+    },
+    {
+      "cause_key": "settings_error",
+      "cause_name": "温度或模式设置错误",
+      "description": "设定温度不当或模式选错，体感与预期不符。",
+      "prevalence": 0.2,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "核对设定温度与运行模式后重试。"
+    },
+    {
+      "cause_key": "child_lock_on",
+      "cause_name": "童锁开启",
+      "description": "遥控童锁开启，按键操作无响应。",
+      "prevalence": 0.06,
+      "investigation_weight": 5,
+      "fix_action": "unlock_child_lock",
+      "fix_suggestion": "按说明书组合键解除童锁。"
+    },
+    {
+      "cause_key": "sleep_mode_confusion",
+      "cause_name": "睡眠模式误解",
+      "description": "睡眠模式自动调整温度，被误认为不制冷或温控失灵。",
+      "prevalence": 0.06,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "检查是否处于睡眠模式并按需退出。"
+    },
+    {
+      "cause_key": "timer_misconfig",
+      "cause_name": "定时任务误配置",
+      "description": "遗留定时开关机任务导致空调意外启停或切换模式。",
+      "prevalence": 0.08,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "清理不需要的定时任务。"
+    },
+    {
+      "cause_key": "gateway_offline",
+      "cause_name": "网关离线",
+      "description": "家庭网关离线，依赖网关的空调失联。",
+      "prevalence": 0.15,
+      "investigation_weight": 5,
+      "fix_action": "restart_gateway",
+      "fix_suggestion": "重启网关恢复设备接入。"
+    },
+    {
+      "cause_key": "wifi_module_fault",
+      "cause_name": "WiFi模块故障",
+      "description": "空调 WiFi 模块损坏，无法接入网络。",
+      "prevalence": 0.05,
+      "investigation_weight": 2,
+      "fix_action": "replace_module",
+      "fix_suggestion": "更换 WiFi 模块，建议售后处理。"
+    },
+    {
+      "cause_key": "wifi_disconnected",
+      "cause_name": "WiFi断连",
+      "description": "空调 WiFi 连接断开，App 控制与状态同步失效。",
+      "prevalence": 0.12,
+      "investigation_weight": 4,
+      "fix_action": "rebind_wifi",
+      "fix_suggestion": "重新配置空调网络连接。"
+    },
+    {
+      "cause_key": "cloud_outage",
+      "cause_name": "云端服务异常",
+      "description": "厂商云平台故障，远程控制不可用。",
+      "prevalence": 0.04,
+      "investigation_weight": 4,
+      "fix_action": "wait_service",
+      "fix_suggestion": "等待云服务恢复，期间可用遥控器控制。"
+    },
+    {
+      "cause_key": "firmware_fault",
+      "cause_name": "固件异常",
+      "description": "空调固件运行异常，出现误切换模式或离线。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "断电重启并升级到最新稳定固件。"
+    },
+    {
+      "cause_key": "firmware_update_needed",
+      "cause_name": "固件待升级",
+      "description": "固件版本过旧，能耗策略或联动接口不兼容。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "在 App 中检查并升级固件。"
+    },
+    {
+      "cause_key": "remote_battery_dead",
+      "cause_name": "遥控器电池耗尽",
+      "description": "遥控器电池耗尽，按键无响应。",
+      "prevalence": 0.2,
+      "investigation_weight": 5,
+      "fix_action": "replace_battery",
+      "fix_suggestion": "更换遥控器电池后重试。"
+    },
+    {
+      "cause_key": "ir_receiver_fault",
+      "cause_name": "遥控接收头故障",
+      "description": "空调红外接收头损坏，收不到遥控指令。",
+      "prevalence": 0.05,
+      "investigation_weight": 2,
+      "fix_action": "replace_module",
+      "fix_suggestion": "更换接收头组件，建议售后处理。"
+    },
+    {
+      "cause_key": "ir_path_blocked",
+      "cause_name": "遥控路径遮挡",
+      "description": "遥控发射路径被遮挡，信号无法到达接收窗。",
+      "prevalence": 0.08,
+      "investigation_weight": 5,
+      "fix_action": "clear_ir_path",
+      "fix_suggestion": "移除接收窗前的遮挡物后重试。"
+    },
+    {
+      "cause_key": "outdoor_unit_dirty",
+      "cause_name": "外机脏堵",
+      "description": "外机翅片积灰柳絮堵塞，换热恶化、噪音与能耗上升。",
+      "prevalence": 0.09,
+      "investigation_weight": 4,
+      "fix_action": "clean_condenser",
+      "fix_suggestion": "清洗外机翅片与风扇。"
+    },
+    {
+      "cause_key": "outdoor_bracket_loose",
+      "cause_name": "外机支架松动",
+      "description": "外机支架或螺栓松动，运行共振噪音增大。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "tighten_fixture",
+      "fix_suggestion": "紧固外机支架螺栓，注意高空作业安全。"
+    },
+    {
+      "cause_key": "fan_blade_deformed",
+      "cause_name": "风叶变形",
+      "description": "风扇叶片变形或破损，动平衡破坏产生噪音。",
+      "prevalence": 0.03,
+      "investigation_weight": 1,
+      "fix_action": "replace_fan_blade",
+      "fix_suggestion": "更换风扇叶片。"
+    },
+    {
+      "cause_key": "bearing_worn",
+      "cause_name": "轴承磨损",
+      "description": "电机轴承磨损，运行发出持续摩擦噪音。",
+      "prevalence": 0.03,
+      "investigation_weight": 1,
+      "fix_action": "replace_bearing",
+      "fix_suggestion": "更换电机轴承或电机总成。"
+    },
+    {
+      "cause_key": "compressor_liquid_floodback",
+      "cause_name": "压缩机回液",
+      "description": "液态冷媒进入压缩机，发出异常敲击声。",
+      "prevalence": 0.02,
+      "investigation_weight": 1,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师处理，避免压缩机损坏。"
+    },
+    {
+      "cause_key": "defrost_cycle_normal",
+      "cause_name": "正常化霜运行",
+      "description": "制热时定期化霜暂停吹热风，属正常现象易被误判。",
+      "prevalence": 0.1,
+      "investigation_weight": 5,
+      "fix_action": "wait_defrost",
+      "fix_suggestion": "等待化霜结束后自动恢复制热。"
+    },
+    {
+      "cause_key": "humidity_condensation",
+      "cause_name": "高湿凝露假性漏水",
+      "description": "高湿天气出风口凝露滴水，非真实故障。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "调低风速并关闭加湿设备观察。"
+    },
+    {
+      "cause_key": "insulation_damaged",
+      "cause_name": "保温管破损",
+      "description": "连接管保温层破损，管壁凝露滴水且冷损增大。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "replace_insulation",
+      "fix_suggestion": "重新包扎保温管。"
+    },
+    {
+      "cause_key": "drain_slope_insufficient",
+      "cause_name": "排水坡度不足",
+      "description": "排水管坡度不够，冷凝水排出不畅而外溢。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "reinstall_unit",
+      "fix_suggestion": "调整排水管坡度保证顺畅排水。"
+    },
+    {
+      "cause_key": "refrigerant_micro_leak",
+      "cause_name": "微漏导致效果衰减",
+      "description": "慢性微漏使冷媒逐年减少，制冷效果缓慢变差。",
+      "prevalence": 0.04,
+      "investigation_weight": 1,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师检漏并补充冷媒。"
+    },
+    {
+      "cause_key": "room_seal_poor",
+      "cause_name": "房间密闭性差",
+      "description": "门窗密封不良，冷量热量持续流失。",
+      "prevalence": 0.08,
+      "investigation_weight": 4,
+      "fix_action": "seal_room",
+      "fix_suggestion": "关闭门窗并改善房间密封后复测。"
+    },
+    {
+      "cause_key": "heat_load_high",
+      "cause_name": "房间热负荷过大",
+      "description": "西晒、顶楼或人员过多，超出空调制冷能力。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "拉遮阳帘并减少室内热源，必要时换大匹数。"
+    },
+    {
+      "cause_key": "aux_heat_off",
+      "cause_name": "电辅热未开启",
+      "description": "低温工况下未开电辅热，制热体感不足。",
+      "prevalence": 0.05,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "寒冷天气开启电辅热功能。"
+    },
+    {
+      "cause_key": "electric_heater_fault",
+      "cause_name": "电辅热故障",
+      "description": "电辅热器件损坏，低温时制热明显不足。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "contact_engineer",
+      "fix_suggestion": "请联系售后工程师检修电辅热。"
+    },
+    {
+      "cause_key": "air_inlet_blocked",
+      "cause_name": "进风口遮挡",
+      "description": "进风口被窗帘或杂物遮挡，风量下降且噪音增大。",
+      "prevalence": 0.07,
+      "investigation_weight": 5,
+      "fix_action": "clear_air_inlet",
+      "fix_suggestion": "清理进风口周围的遮挡物。"
+    },
+    {
+      "cause_key": "odor_source_internal",
+      "cause_name": "内部积尘霉变",
+      "description": "蒸发器与风道积尘霉变，出风带酸腐异味。",
+      "prevalence": 0.1,
+      "investigation_weight": 4,
+      "fix_action": "deep_clean",
+      "fix_suggestion": "做蒸发器与风道深度清洗并开启干燥功能。"
+    },
+    {
+      "cause_key": "heat_exchanger_dirty",
+      "cause_name": "换热器脏污",
+      "description": "换热器脏污导致换热效率下降且滋生异味。",
+      "prevalence": 0.06,
+      "investigation_weight": 3,
+      "fix_action": "deep_clean",
+      "fix_suggestion": "清洗换热器翅片。"
+    },
+    {
+      "cause_key": "energy_meter_error",
+      "cause_name": "能耗计量误差",
+      "description": "智能计量数据偏差，被误判为能耗异常。",
+      "prevalence": 0.03,
+      "investigation_weight": 4,
+      "fix_action": "recalibrate_device",
+      "fix_suggestion": "与电表实际读数对比后重新校准。"
+    },
+    {
+      "cause_key": "ambient_sensor_drift",
+      "cause_name": "环境温度传感器漂移",
+      "description": "室温采样漂移，显示温度与体感持续偏离。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "recalibrate_device",
+      "fix_suggestion": "用参照温度计校准温度偏移量。"
+    }
+  ],
+  "symptom_causes": [
+    {
+      "symptom": "ac_not_cooling",
+      "causes": [
+        "refrigerant_leak", "refrigerant_low", "compressor_fault",
+        "compressor_capacitor_fault", "evaporator_frost", "condenser_dirty",
+        "filter_clogged", "low_pressure_protection", "high_pressure_protection",
+        "comm_wire_fault", "indoor_outdoor_comm_fault", "settings_error",
+        "timer_misconfig", "outdoor_unit_dirty", "compressor_liquid_floodback",
+        "refrigerant_micro_leak", "room_seal_poor", "heat_load_high",
+        "heat_exchanger_dirty", "air_inlet_blocked"
+      ]
+    },
+    {
+      "symptom": "ac_not_heating",
+      "causes": [
+        "refrigerant_low", "four_way_valve_fault", "settings_error",
+        "sleep_mode_confusion", "defrost_cycle_normal", "room_seal_poor",
+        "aux_heat_off", "electric_heater_fault"
+      ]
+    },
+    {
+      "symptom": "ac_no_air",
+      "causes": [
+        "evaporator_frost", "filter_clogged", "fan_motor_fault",
+        "fan_capacitor_fault", "main_board_fault", "air_inlet_blocked"
+      ]
+    },
+    {
+      "symptom": "ac_leaking_water",
+      "causes": [
+        "drain_pump_fault", "drain_pipe_clog", "water_pan_cracked",
+        "installation_tilt", "humidity_condensation", "insulation_damaged",
+        "drain_slope_insufficient"
+      ]
+    },
+    {
+      "symptom": "ac_noise",
+      "causes": [
+        "compressor_fault", "condenser_dirty", "fan_motor_fault",
+        "outdoor_unit_dirty", "outdoor_bracket_loose", "fan_blade_deformed",
+        "bearing_worn", "compressor_liquid_floodback", "air_inlet_blocked"
+      ]
+    },
+    {
+      "symptom": "ac_odor",
+      "causes": ["filter_clogged", "drain_pipe_clog", "odor_source_internal", "heat_exchanger_dirty"]
+    },
+    {
+      "symptom": "ac_offline",
+      "causes": ["gateway_offline", "wifi_module_fault", "wifi_disconnected", "cloud_outage", "firmware_fault"]
+    },
+    {
+      "symptom": "ac_temp_inaccurate",
+      "causes": ["temp_sensor_fault", "pipe_sensor_fault", "sleep_mode_confusion", "ambient_sensor_drift"]
+    },
+    {
+      "symptom": "ac_short_cycling",
+      "causes": [
+        "compressor_fault", "compressor_capacitor_fault", "fan_capacitor_fault",
+        "pipe_sensor_fault", "voltage_abnormal", "low_pressure_protection",
+        "high_pressure_protection", "overcurrent_protection"
+      ]
+    },
+    {
+      "symptom": "ac_remote_fail",
+      "causes": [
+        "child_lock_on", "wifi_disconnected", "cloud_outage",
+        "remote_battery_dead", "ir_receiver_fault", "ir_path_blocked"
+      ]
+    },
+    {
+      "symptom": "ac_energy_spike",
+      "causes": [
+        "refrigerant_low", "condenser_dirty", "filter_clogged",
+        "firmware_update_needed", "outdoor_unit_dirty", "insulation_damaged",
+        "room_seal_poor", "heat_exchanger_dirty", "energy_meter_error"
+      ]
+    },
+    {
+      "symptom": "ac_freezing",
+      "causes": ["refrigerant_leak", "evaporator_frost", "pipe_sensor_fault"]
+    },
+    {
+      "symptom": "ac_display_fault",
+      "causes": [
+        "main_board_fault", "display_board_fault", "voltage_abnormal",
+        "comm_wire_fault", "indoor_outdoor_comm_fault", "firmware_fault"
+      ]
+    },
+    {
+      "symptom": "ac_auto_mode_switch",
+      "causes": [
+        "temp_sensor_fault", "indoor_outdoor_comm_fault", "timer_misconfig",
+        "firmware_fault", "firmware_update_needed"
+      ]
+    }
+  ]
+}

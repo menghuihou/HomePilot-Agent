@@ -1,6 +1,14 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Float,
+    ForeignKey,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -167,3 +175,98 @@ class Preference(Base):
 
     home: Mapped[Home] = relationship(back_populates="preferences")
     member: Mapped[Member | None] = relationship(back_populates="preferences")
+
+
+class FaultSymptom(Base):
+    """故障症状字典，诊断子图抽取出的 symptom_key 反查这里。"""
+
+    __tablename__ = "fault_symptoms"
+    __table_args__ = (
+        UniqueConstraint(
+            "device_type",
+            "symptom_key",
+            name="uq_fault_symptoms_domain_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # 设备域，如 light / ac / sensor / gateway。
+    device_type: Mapped[str] = mapped_column(String(30))
+    # 稳定的症状标识，如 light_not_on；中文名称交给 description。
+    symptom_key: Mapped[str] = mapped_column(String(50))
+    description: Mapped[str] = mapped_column(String(200))
+    synthetic: Mapped[bool] = mapped_column(default=True)
+    source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    mappings: Mapped[list[SymptomCause]] = relationship(back_populates="symptom")
+
+
+class FaultCause(Base):
+    """故障原因知识条目：先验概率 + 排查价值权重 + 修复建议。"""
+
+    __tablename__ = "fault_causes"
+    __table_args__ = (
+        UniqueConstraint(
+            "device_type",
+            "cause_key",
+            name="uq_fault_causes_domain_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    device_type: Mapped[str] = mapped_column(String(30))
+    # 稳定的原因标识，如 bulb_burned；诊断结论与测试都引用它。
+    cause_key: Mapped[str] = mapped_column(String(50))
+    cause_name: Mapped[str] = mapped_column(String(100))
+    description: Mapped[str] = mapped_column(String(500))
+    # 先验概率 0-1，候选假设按命中率并列时用 prevalence 决胜。
+    prevalence: Mapped[float] = mapped_column(Float)
+    # 排查价值权重 1-5：分高表示"检查便宜且诊断价值大"，优先排查。
+    investigation_weight: Mapped[int] = mapped_column(default=3)
+    # 修复动作标识，供第 3 周风险规则表映射 risk_level；纯建议类可空。
+    fix_action: Mapped[str | None] = mapped_column(String(50))
+    fix_suggestion: Mapped[str] = mapped_column(String(300))
+    synthetic: Mapped[bool] = mapped_column(default=True)
+    source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    mappings: Mapped[list[SymptomCause]] = relationship(back_populates="cause")
+
+
+class SymptomCause(Base):
+    """症状 ↔ 原因多对多映射，候选假设确定性检索的关联表。"""
+
+    __tablename__ = "symptom_causes"
+    __table_args__ = (
+        UniqueConstraint(
+            "symptom_id",
+            "cause_id",
+            name="uq_symptom_causes_pair",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    symptom_id: Mapped[int] = mapped_column(ForeignKey("fault_symptoms.id"))
+    cause_id: Mapped[int] = mapped_column(ForeignKey("fault_causes.id"))
+    synthetic: Mapped[bool] = mapped_column(default=True)
+    source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    symptom: Mapped[FaultSymptom] = relationship(back_populates="mappings")
+    cause: Mapped[FaultCause] = relationship(back_populates="mappings")

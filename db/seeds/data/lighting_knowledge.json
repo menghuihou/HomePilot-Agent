@@ -1,0 +1,676 @@
+{
+  "device_type": "light",
+  "symptoms": [
+    {"symptom_key": "light_not_on", "description": "灯不亮，开灯后无光输出"},
+    {"symptom_key": "light_flicker", "description": "灯光闪烁或频闪"},
+    {"symptom_key": "light_dim", "description": "亮度明显偏暗"},
+    {"symptom_key": "light_offline", "description": "设备在 App 中显示离线"},
+    {"symptom_key": "light_no_response", "description": "指令下发后灯无任何反应"},
+    {"symptom_key": "light_color_abnormal", "description": "颜色显示异常，如偏色或跳色"},
+    {"symptom_key": "light_self_on_off", "description": "未经操作自动开关灯"},
+    {"symptom_key": "light_delay_on", "description": "开灯明显延迟"},
+    {"symptom_key": "light_brightness_stuck", "description": "亮度调节无变化"},
+    {"symptom_key": "light_color_temp_stuck", "description": "色温调节无变化"},
+    {"symptom_key": "light_scene_fail", "description": "场景或联动中灯光执行失败"},
+    {"symptom_key": "light_voice_fail", "description": "语音指令控制灯失败"},
+    {"symptom_key": "light_group_diff_sync", "description": "同一群组内多灯状态不同步"},
+    {"symptom_key": "light_buzz", "description": "工作时发出嗡嗡或滋滋异响"},
+    {"symptom_key": "light_overheat", "description": "灯具或驱动表面过热"},
+    {"symptom_key": "light_remote_fail", "description": "遥控器控制灯失效"}
+  ],
+  "causes": [
+    {
+      "cause_key": "bulb_burned",
+      "cause_name": "灯泡损坏",
+      "description": "灯泡寿命到期或烧毁，电路不通导致无光输出。",
+      "prevalence": 0.3,
+      "investigation_weight": 5,
+      "fix_action": "replace_bulb",
+      "fix_suggestion": "更换同型号灯泡后重新开灯验证。"
+    },
+    {
+      "cause_key": "driver_failure",
+      "cause_name": "LED驱动电源故障",
+      "description": "驱动电源损坏，无法为灯珠提供稳定输出。",
+      "prevalence": 0.15,
+      "investigation_weight": 4,
+      "fix_action": "replace_driver",
+      "fix_suggestion": "更换匹配的驱动电源，建议由专业人员操作。"
+    },
+    {
+      "cause_key": "breaker_tripped",
+      "cause_name": "断路器跳闸",
+      "description": "照明回路断路器跳闸，回路整体断电。",
+      "prevalence": 0.1,
+      "investigation_weight": 5,
+      "fix_action": "reset_breaker",
+      "fix_suggestion": "确认无短路后复位断路器，频繁跳闸需报修线路。"
+    },
+    {
+      "cause_key": "power_outage",
+      "cause_name": "区域停电",
+      "description": "所在区域停电，灯具与网关同时失电。",
+      "prevalence": 0.05,
+      "investigation_weight": 5,
+      "fix_action": "check_power",
+      "fix_suggestion": "确认家中其他回路是否断电，等待来电后复查。"
+    },
+    {
+      "cause_key": "switch_fault",
+      "cause_name": "墙壁开关故障",
+      "description": "墙壁开关触点老化，闭合不良导致供电异常。",
+      "prevalence": 0.08,
+      "investigation_weight": 4,
+      "fix_action": "replace_switch",
+      "fix_suggestion": "更换墙壁开关，建议由电工操作。"
+    },
+    {
+      "cause_key": "socket_loose",
+      "cause_name": "灯座接触不良",
+      "description": "灯泡与灯座接触不良，时通时断。",
+      "prevalence": 0.1,
+      "investigation_weight": 4,
+      "fix_action": "tighten_socket",
+      "fix_suggestion": "断电后拧紧灯泡，检查灯座簧片是否变形。"
+    },
+    {
+      "cause_key": "wiring_break",
+      "cause_name": "线路老化断路",
+      "description": "照明线路老化断路，灯具得不到供电。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "contact_electrician",
+      "fix_suggestion": "请联系电工检修线路，不建议自行处理。"
+    },
+    {
+      "cause_key": "voltage_unstable",
+      "cause_name": "供电电压不稳",
+      "description": "电网电压波动导致灯光闪烁或亮度异常。",
+      "prevalence": 0.06,
+      "investigation_weight": 3,
+      "fix_action": "check_voltage",
+      "fix_suggestion": "观察同回路其他电器是否同步波动，必要时安装稳压器。"
+    },
+    {
+      "cause_key": "gateway_offline",
+      "cause_name": "网关离线",
+      "description": "家庭网关离线，依赖网关的智能灯全部失联。",
+      "prevalence": 0.18,
+      "investigation_weight": 5,
+      "fix_action": "restart_gateway",
+      "fix_suggestion": "重启网关恢复设备接入。"
+    },
+    {
+      "cause_key": "device_offline",
+      "cause_name": "设备自身离线",
+      "description": "灯自身掉线，其他设备通信正常。",
+      "prevalence": 0.12,
+      "investigation_weight": 4,
+      "fix_action": "restart_device",
+      "fix_suggestion": "断电重启灯具后观察是否重新上线。"
+    },
+    {
+      "cause_key": "wifi_disconnected",
+      "cause_name": "WiFi断连",
+      "description": "灯具 WiFi 连接断开，无法接收云端指令。",
+      "prevalence": 0.12,
+      "investigation_weight": 4,
+      "fix_action": "rebind_wifi",
+      "fix_suggestion": "重新配置灯具网络连接。"
+    },
+    {
+      "cause_key": "weak_signal",
+      "cause_name": "无线信号弱",
+      "description": "灯具距路由器或网关过远，信号弱导致响应不稳。",
+      "prevalence": 0.08,
+      "investigation_weight": 3,
+      "fix_action": "improve_signal",
+      "fix_suggestion": "调整路由器位置或增加中继，缩短设备与网关距离。"
+    },
+    {
+      "cause_key": "firmware_fault",
+      "cause_name": "固件异常",
+      "description": "灯具固件运行异常，出现误动作或无响应。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "重启设备并升级到最新稳定固件。"
+    },
+    {
+      "cause_key": "firmware_update_needed",
+      "cause_name": "固件待升级",
+      "description": "固件版本过旧，与平台新接口不兼容。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "在 App 中检查并升级设备固件。"
+    },
+    {
+      "cause_key": "timer_misconfig",
+      "cause_name": "定时任务误配置",
+      "description": "遗留的定时开关灯任务在意外时间触发。",
+      "prevalence": 0.08,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "检查并清理不需要的定时任务。"
+    },
+    {
+      "cause_key": "scene_conflict",
+      "cause_name": "场景联动冲突",
+      "description": "多个场景对同一盏灯下发相反指令，行为互相覆盖。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "梳理场景规则，移除对同一设备的冲突指令。"
+    },
+    {
+      "cause_key": "automation_misfire",
+      "cause_name": "自动化规则误触发",
+      "description": "传感器误报或规则条件过宽，导致自动化误开灯。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "收紧自动化触发条件并观察触发日志。"
+    },
+    {
+      "cause_key": "token_expired",
+      "cause_name": "平台授权过期",
+      "description": "第三方平台授权 token 过期，指令下发被拒。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "rebind_account",
+      "fix_suggestion": "重新绑定平台账号授权。"
+    },
+    {
+      "cause_key": "dimmer_incompatible",
+      "cause_name": "调光器不兼容",
+      "description": "灯泡与墙壁调光器不兼容，出现闪烁或啸叫。",
+      "prevalence": 0.07,
+      "investigation_weight": 3,
+      "fix_action": "replace_dimmer",
+      "fix_suggestion": "更换兼容的调光器或改用普通开关。"
+    },
+    {
+      "cause_key": "led_aging",
+      "cause_name": "灯珠老化",
+      "description": "LED 灯珠光衰老化，亮度下降或光色偏移。",
+      "prevalence": 0.1,
+      "investigation_weight": 3,
+      "fix_action": "replace_bulb",
+      "fix_suggestion": "更换新灯泡改善亮度与光色。"
+    },
+    {
+      "cause_key": "capacitor_aging",
+      "cause_name": "驱动电容老化",
+      "description": "驱动电容容量衰减，输出纹波增大导致闪烁。",
+      "prevalence": 0.06,
+      "investigation_weight": 3,
+      "fix_action": "replace_driver",
+      "fix_suggestion": "更换驱动电源电容或整个驱动模块。"
+    },
+    {
+      "cause_key": "relay_fault",
+      "cause_name": "继电器故障",
+      "description": "智能开关继电器粘连或失灵，开关状态错乱。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "replace_module",
+      "fix_suggestion": "更换智能开关模块，建议由电工操作。"
+    },
+    {
+      "cause_key": "wiring_reversed",
+      "cause_name": "零火线接反",
+      "description": "开关零火线接反，关灯后灯具仍带电出现微亮或闪烁。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "contact_electrician",
+      "fix_suggestion": "请电工校正接线，不建议自行操作。"
+    },
+    {
+      "cause_key": "cloud_outage",
+      "cause_name": "云端服务异常",
+      "description": "厂商云平台故障，云端指令与语音控制不可用。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "wait_service",
+      "fix_suggestion": "等待云服务恢复，期间可用物理开关控制。"
+    },
+    {
+      "cause_key": "voice_recognition_error",
+      "cause_name": "语音识别偏差",
+      "description": "语音助手识别出的设备名或动作与预期不符。",
+      "prevalence": 0.15,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "用更明确的设备名重试，或修正设备别名。"
+    },
+    {
+      "cause_key": "remote_battery_dead",
+      "cause_name": "遥控器电池耗尽",
+      "description": "遥控器电池耗尽，按键无发射。",
+      "prevalence": 0.25,
+      "investigation_weight": 5,
+      "fix_action": "replace_battery",
+      "fix_suggestion": "更换遥控器电池后重试。"
+    },
+    {
+      "cause_key": "remote_unpaired",
+      "cause_name": "遥控器未配对",
+      "description": "遥控器与灯具配对关系丢失或未完成。",
+      "prevalence": 0.1,
+      "investigation_weight": 4,
+      "fix_action": "pair_remote",
+      "fix_suggestion": "按说明书重新完成遥控器配对。"
+    },
+    {
+      "cause_key": "ir_receiver_fault",
+      "cause_name": "红外接收故障",
+      "description": "灯具红外接收头损坏，收不到遥控指令。",
+      "prevalence": 0.05,
+      "investigation_weight": 2,
+      "fix_action": "replace_module",
+      "fix_suggestion": "更换红外接收模块，建议返修或售后处理。"
+    },
+    {
+      "cause_key": "group_misconfig",
+      "cause_name": "群组配置错误",
+      "description": "灯群组成员配置不全，群控时部分灯被遗漏。",
+      "prevalence": 0.08,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "核对群组成员清单并补齐缺失设备。"
+    },
+    {
+      "cause_key": "zigbee_channel_conflict",
+      "cause_name": "Zigbee信道冲突",
+      "description": "Zigbee 网络与 WiFi 信道重叠，通信质量下降。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "change_channel",
+      "fix_suggestion": "调整 Zigbee 信道避开 WiFi 占用频段。"
+    },
+    {
+      "cause_key": "shade_dirty",
+      "cause_name": "灯罩污损",
+      "description": "灯罩积灰或污损，透光率下降导致感觉变暗。",
+      "prevalence": 0.12,
+      "investigation_weight": 5,
+      "fix_action": "clean_shade",
+      "fix_suggestion": "断电后清洁灯罩再对比亮度。"
+    },
+    {
+      "cause_key": "poor_heat_dissipation",
+      "cause_name": "散热不良",
+      "description": "灯具散热差，长期高温加速光衰并诱发闪烁。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "improve_ventilation",
+      "fix_suggestion": "改善灯具通风散热条件，避免封闭安装。"
+    },
+    {
+      "cause_key": "color_sensor_drift",
+      "cause_name": "颜色校准漂移",
+      "description": "灯珠颜色校准参数漂移，显示颜色偏色。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "recalibrate_device",
+      "fix_suggestion": "在 App 中执行颜色校准。"
+    },
+    {
+      "cause_key": "pwm_signal_fault",
+      "cause_name": "PWM调光信号异常",
+      "description": "调光 PWM 信号异常，亮度或色温无法调节。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "重启设备并升级固件，无效则返修。"
+    },
+    {
+      "cause_key": "switch_overload",
+      "cause_name": "开关过载",
+      "description": "接入灯具功率超过开关额定值，过热并发出异响。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "reduce_load",
+      "fix_suggestion": "减少回路灯具数量或更换更大额定开关。"
+    },
+    {
+      "cause_key": "wrong_bulb_type",
+      "cause_name": "灯泡规格不匹配",
+      "description": "灯泡功率或类型与灯具要求不符，工作异常。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "replace_bulb",
+      "fix_suggestion": "更换为灯具标注规格的灯泡。"
+    },
+    {
+      "cause_key": "double_control_conflict",
+      "cause_name": "双控开关冲突",
+      "description": "双控开关两侧状态不一致，开关动作互相干扰。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "检查双控接线与智能开关场景绑定。"
+    },
+    {
+      "cause_key": "neutral_line_fault",
+      "cause_name": "零线接触不良",
+      "description": "零线端子松动，回路阻抗异常导致灯光异常。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "contact_electrician",
+      "fix_suggestion": "请电工紧固零线端子。"
+    },
+    {
+      "cause_key": "lamp_holder_aging",
+      "cause_name": "灯头簧片老化",
+      "description": "灯座簧片弹性衰减，与灯泡接触时通时断。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "replace_holder",
+      "fix_suggestion": "更换灯座，建议由电工操作。"
+    },
+    {
+      "cause_key": "driver_overheat",
+      "cause_name": "驱动过热保护",
+      "description": "驱动电源过热进入保护，恢复供电后才亮灯。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "improve_ventilation",
+      "fix_suggestion": "改善灯具散热，等待驱动冷却后复测。"
+    },
+    {
+      "cause_key": "wifi_router_reboot",
+      "cause_name": "路由器重启中",
+      "description": "路由器正在重启，WiFi 设备短暂离线。",
+      "prevalence": 0.04,
+      "investigation_weight": 5,
+      "fix_action": "wait_service",
+      "fix_suggestion": "等待路由器重启完成后设备自动回连。"
+    },
+    {
+      "cause_key": "dhcp_fault",
+      "cause_name": "DHCP分配异常",
+      "description": "路由器 DHCP 服务异常，设备拿不到有效地址。",
+      "prevalence": 0.03,
+      "investigation_weight": 3,
+      "fix_action": "check_router",
+      "fix_suggestion": "重启路由器或检查 DHCP 设置。"
+    },
+    {
+      "cause_key": "ip_conflict",
+      "cause_name": "IP地址冲突",
+      "description": "局域网内地址冲突，设备通信间歇中断。",
+      "prevalence": 0.03,
+      "investigation_weight": 3,
+      "fix_action": "check_router",
+      "fix_suggestion": "为设备设置地址保留，消除地址冲突。"
+    },
+    {
+      "cause_key": "cloud_rate_limit",
+      "cause_name": "云端接口限流",
+      "description": "短时间内指令过多触发平台限流，指令延迟或丢弃。",
+      "prevalence": 0.03,
+      "investigation_weight": 3,
+      "fix_action": "wait_service",
+      "fix_suggestion": "降低指令频率，稍后重试。"
+    },
+    {
+      "cause_key": "ntp_time_skew",
+      "cause_name": "设备时间不同步",
+      "description": "设备时钟漂移，定时任务在错误时间执行。",
+      "prevalence": 0.02,
+      "investigation_weight": 3,
+      "fix_action": "sync_time",
+      "fix_suggestion": "重启设备同步网络时间后复查定时任务。"
+    },
+    {
+      "cause_key": "scene_data_missing",
+      "cause_name": "场景数据未下发",
+      "description": "场景配置未同步到设备，执行时找不到动作定义。",
+      "prevalence": 0.04,
+      "investigation_weight": 4,
+      "fix_action": "update_scene",
+      "fix_suggestion": "重新保存并下发场景配置。"
+    },
+    {
+      "cause_key": "voice_account_mismatch",
+      "cause_name": "语音账号未绑定设备",
+      "description": "语音助手账号下未同步该设备，指令找不到目标。",
+      "prevalence": 0.06,
+      "investigation_weight": 5,
+      "fix_action": "rebind_account",
+      "fix_suggestion": "在语音助手中重新同步设备列表。"
+    },
+    {
+      "cause_key": "mesh_rebuild",
+      "cause_name": "Zigbee网络重建中",
+      "description": "Mesh 网络正在重建路由，设备短暂离线或延迟。",
+      "prevalence": 0.03,
+      "investigation_weight": 3,
+      "fix_action": "wait_service",
+      "fix_suggestion": "等待网络自愈完成，期间避免大量操作。"
+    },
+    {
+      "cause_key": "bulb_type_mismatch_dimming",
+      "cause_name": "非调光灯泡接入调光电路",
+      "description": "普通灯泡接入调光电路，出现闪烁或亮度不可调。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "replace_bulb",
+      "fix_suggestion": "更换为标注可调光的灯泡。"
+    },
+    {
+      "cause_key": "led_dead_section",
+      "cause_name": "灯珠串局部损坏",
+      "description": "串联灯珠部分损坏，整灯亮度下降或色温偏移。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "replace_bulb",
+      "fix_suggestion": "更换灯泡或灯板。"
+    },
+    {
+      "cause_key": "driver_audible_noise",
+      "cause_name": "驱动电源啸叫",
+      "description": "驱动电感或电容工作啸叫，空载噪声明显。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "replace_driver",
+      "fix_suggestion": "更换低噪声驱动电源。"
+    },
+    {
+      "cause_key": "loose_fixture",
+      "cause_name": "固定件松动共振",
+      "description": "灯具固定件松动，工作时共振产生异响。",
+      "prevalence": 0.04,
+      "investigation_weight": 4,
+      "fix_action": "tighten_fixture",
+      "fix_suggestion": "断电后紧固灯具安装件。"
+    },
+    {
+      "cause_key": "thermal_throttle",
+      "cause_name": "过热降亮度",
+      "description": "灯具过热触发降额保护，主动调低亮度。",
+      "prevalence": 0.03,
+      "investigation_weight": 3,
+      "fix_action": "improve_ventilation",
+      "fix_suggestion": "改善散热后亮度会自动恢复。"
+    },
+    {
+      "cause_key": "color_temp_sensor_dirty",
+      "cause_name": "色温采样污损",
+      "description": "色温检测窗口污损，色温反馈失真导致调节异常。",
+      "prevalence": 0.02,
+      "investigation_weight": 4,
+      "fix_action": "clean_shade",
+      "fix_suggestion": "清洁检测窗口后重新校准。"
+    },
+    {
+      "cause_key": "app_cache_stale",
+      "cause_name": "App状态缓存过期",
+      "description": "App 展示的状态缓存过期，与设备实际状态不一致。",
+      "prevalence": 0.1,
+      "investigation_weight": 5,
+      "fix_action": "refresh_app",
+      "fix_suggestion": "下拉刷新设备列表或重启 App。"
+    },
+    {
+      "cause_key": "firmware_beta_bug",
+      "cause_name": "Beta固件缺陷",
+      "description": "测试版固件存在缺陷，引发异常行为。",
+      "prevalence": 0.02,
+      "investigation_weight": 2,
+      "fix_action": "rollback_firmware",
+      "fix_suggestion": "回退到最新稳定版固件。"
+    },
+    {
+      "cause_key": "emergency_mode",
+      "cause_name": "应急模式占用",
+      "description": "设备处于应急或售后模式，忽略常规指令。",
+      "prevalence": 0.02,
+      "investigation_weight": 3,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "在 App 中退出应急模式。"
+    },
+    {
+      "cause_key": "room_switch_independent",
+      "cause_name": "物理开关切断供电",
+      "description": "墙壁开关被关闭，智能灯彻底断电而离线。",
+      "prevalence": 0.2,
+      "investigation_weight": 5,
+      "fix_action": "toggle_switch",
+      "fix_suggestion": "检查墙壁开关是否被误关，保持常闭。"
+    },
+    {
+      "cause_key": "driver_output_fluctuation",
+      "cause_name": "驱动输出波动",
+      "description": "驱动输出电流波动，灯光明暗不稳。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "replace_driver",
+      "fix_suggestion": "更换驱动电源。"
+    },
+    {
+      "cause_key": "socket_carbonization",
+      "cause_name": "灯座碳化",
+      "description": "灯座触点碳化打火，伴随异响与过热，需立即处理。",
+      "prevalence": 0.02,
+      "investigation_weight": 1,
+      "fix_action": "contact_electrician",
+      "fix_suggestion": "立即断电并联系电工更换灯座，有火灾风险。"
+    }
+  ],
+  "symptom_causes": [
+    {
+      "symptom": "light_not_on",
+      "causes": [
+        "bulb_burned", "driver_failure", "breaker_tripped", "power_outage",
+        "switch_fault", "socket_loose", "wiring_break", "switch_overload",
+        "lamp_holder_aging", "driver_overheat", "socket_carbonization"
+      ]
+    },
+    {
+      "symptom": "light_flicker",
+      "causes": [
+        "driver_failure", "socket_loose", "voltage_unstable", "dimmer_incompatible",
+        "led_aging", "capacitor_aging", "wiring_reversed", "neutral_line_fault",
+        "pwm_signal_fault", "wrong_bulb_type", "bulb_type_mismatch_dimming",
+        "driver_output_fluctuation", "poor_heat_dissipation"
+      ]
+    },
+    {
+      "symptom": "light_dim",
+      "causes": [
+        "voltage_unstable", "led_aging", "capacitor_aging", "shade_dirty",
+        "thermal_throttle", "led_dead_section", "wrong_bulb_type"
+      ]
+    },
+    {
+      "symptom": "light_offline",
+      "causes": [
+        "power_outage", "gateway_offline", "device_offline", "wifi_disconnected",
+        "weak_signal", "token_expired", "zigbee_channel_conflict",
+        "wifi_router_reboot", "dhcp_fault", "ip_conflict", "mesh_rebuild",
+        "room_switch_independent"
+      ]
+    },
+    {
+      "symptom": "light_no_response",
+      "causes": [
+        "gateway_offline", "device_offline", "wifi_disconnected", "weak_signal",
+        "firmware_fault", "firmware_update_needed", "token_expired", "relay_fault",
+        "cloud_outage", "wifi_router_reboot", "ip_conflict", "cloud_rate_limit",
+        "firmware_beta_bug", "emergency_mode", "room_switch_independent"
+      ]
+    },
+    {
+      "symptom": "light_color_abnormal",
+      "causes": [
+        "firmware_fault", "color_sensor_drift", "led_dead_section",
+        "firmware_beta_bug", "color_temp_sensor_dirty"
+      ]
+    },
+    {
+      "symptom": "light_self_on_off",
+      "causes": [
+        "firmware_fault", "timer_misconfig", "scene_conflict", "automation_misfire",
+        "relay_fault", "wiring_reversed", "double_control_conflict",
+        "ntp_time_skew", "firmware_beta_bug"
+      ]
+    },
+    {
+      "symptom": "light_delay_on",
+      "causes": [
+        "switch_fault", "capacitor_aging", "weak_signal", "driver_overheat",
+        "zigbee_channel_conflict", "cloud_rate_limit", "mesh_rebuild"
+      ]
+    },
+    {
+      "symptom": "light_brightness_stuck",
+      "causes": ["pwm_signal_fault", "bulb_type_mismatch_dimming"]
+    },
+    {
+      "symptom": "light_color_temp_stuck",
+      "causes": ["color_sensor_drift", "pwm_signal_fault", "firmware_beta_bug"]
+    },
+    {
+      "symptom": "light_scene_fail",
+      "causes": [
+        "firmware_update_needed", "scene_conflict", "cloud_outage", "group_misconfig",
+        "scene_data_missing", "firmware_beta_bug"
+      ]
+    },
+    {
+      "symptom": "light_voice_fail",
+      "causes": [
+        "firmware_update_needed", "token_expired", "cloud_outage",
+        "voice_recognition_error", "voice_account_mismatch"
+      ]
+    },
+    {
+      "symptom": "light_group_diff_sync",
+      "causes": [
+        "gateway_offline", "zigbee_channel_conflict", "group_misconfig",
+        "mesh_rebuild", "app_cache_stale"
+      ]
+    },
+    {
+      "symptom": "light_buzz",
+      "causes": [
+        "dimmer_incompatible", "switch_overload", "wrong_bulb_type",
+        "driver_audible_noise", "loose_fixture", "socket_carbonization"
+      ]
+    },
+    {
+      "symptom": "light_overheat",
+      "causes": [
+        "poor_heat_dissipation", "switch_overload", "thermal_throttle",
+        "socket_carbonization"
+      ]
+    },
+    {
+      "symptom": "light_remote_fail",
+      "causes": ["remote_battery_dead", "remote_unpaired", "ir_receiver_fault"]
+    }
+  ]
+}

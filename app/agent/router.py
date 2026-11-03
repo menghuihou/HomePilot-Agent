@@ -113,9 +113,7 @@ def _merge_consecutive_humans(messages: list[BaseMessage]) -> list[BaseMessage]:
 
 
 @observe(as_type="generation", name="intent-router")
-async def _invoke_router(
-    chat_model, prompt_messages: list
-) -> RouterDecision | None:
+async def _invoke_router(chat_model, prompt_messages: list) -> RouterDecision | None:
     """调用 LLM 并解析为结构化意图；None/解析失败均由 classify_intent 兜底。"""
     decision = await chat_model.with_structured_output(RouterDecision).ainvoke(
         prompt_messages

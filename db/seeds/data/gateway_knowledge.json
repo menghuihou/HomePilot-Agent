@@ -1,0 +1,584 @@
+{
+  "device_type": "gateway",
+  "symptoms": [
+    {"symptom_key": "gw_offline", "description": "网关在 App 中显示离线"},
+    {"symptom_key": "gw_all_devices_offline", "description": "大量子设备同时离线"},
+    {"symptom_key": "gw_pair_fail", "description": "子设备配对失败"},
+    {"symptom_key": "gw_slow_response", "description": "指令响应明显变慢"},
+    {"symptom_key": "gw_reboot_loop", "description": "网关反复自动重启"},
+    {"symptom_key": "gw_led_abnormal", "description": "指示灯状态异常"},
+    {"symptom_key": "gw_local_control_fail", "description": "本地控制失效，必须走云端才可控"},
+    {"symptom_key": "gw_cloud_sync_fail", "description": "云端状态同步失败"},
+    {"symptom_key": "gw_scene_fail", "description": "本地场景执行失败"},
+    {"symptom_key": "gw_storage_fault", "description": "存储空间告警或日志异常"},
+    {"symptom_key": "gw_overheat", "description": "机身温度明显过高"},
+    {"symptom_key": "gw_no_boot", "description": "无法启动或指示灯全灭"},
+    {"symptom_key": "gw_firmware_update_fail", "description": "固件升级失败"}
+  ],
+  "causes": [
+    {
+      "cause_key": "power_adapter_fault",
+      "cause_name": "电源适配器故障",
+      "description": "适配器输出异常，网关无法获得稳定供电。",
+      "prevalence": 0.1,
+      "investigation_weight": 3,
+      "fix_action": "replace_adapter",
+      "fix_suggestion": "更换同规格电源适配器。"
+    },
+    {
+      "cause_key": "power_cable_loose",
+      "cause_name": "电源线松动",
+      "description": "电源接头松脱或接触不良，网关间歇断电。",
+      "prevalence": 0.12,
+      "investigation_weight": 5,
+      "fix_action": "reseat_cable",
+      "fix_suggestion": "重新插紧电源线并确认指示灯正常。"
+    },
+    {
+      "cause_key": "thermal_protection",
+      "cause_name": "过热保护重启",
+      "description": "机身过热触发保护性重启。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "improve_ventilation",
+      "fix_suggestion": "改善散热条件后再观察是否复现。"
+    },
+    {
+      "cause_key": "ethernet_loose",
+      "cause_name": "网线接口松动",
+      "description": "网线或水晶头接触不良，上行链路中断。",
+      "prevalence": 0.1,
+      "investigation_weight": 5,
+      "fix_action": "reseat_cable",
+      "fix_suggestion": "重新插拔网线并观察网口指示灯。"
+    },
+    {
+      "cause_key": "upstream_router_down",
+      "cause_name": "上游路由器断网",
+      "description": "上游路由器故障或断电，网关失去外网通道。",
+      "prevalence": 0.12,
+      "investigation_weight": 5,
+      "fix_action": "check_router",
+      "fix_suggestion": "检查路由器状态并重启。"
+    },
+    {
+      "cause_key": "isp_outage",
+      "cause_name": "运营商宽带故障",
+      "description": "宽带线路或运营商侧故障，区域断网。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "wait_service",
+      "fix_suggestion": "确认区域断网后等待运营商恢复。"
+    },
+    {
+      "cause_key": "dns_fault",
+      "cause_name": "DNS解析异常",
+      "description": "DNS 配置异常，网关无法解析云服务域名。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "check_router",
+      "fix_suggestion": "更换 DNS 服务器后重启网关。"
+    },
+    {
+      "cause_key": "ip_conflict",
+      "cause_name": "IP地址冲突",
+      "description": "局域网地址冲突，网关通信间歇中断。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "check_router",
+      "fix_suggestion": "为网关设置地址保留。"
+    },
+    {
+      "cause_key": "gw_wifi_disconnected",
+      "cause_name": "网关WiFi断连",
+      "description": "无线接入方式下 WiFi 断开，网关离线。",
+      "prevalence": 0.08,
+      "investigation_weight": 4,
+      "fix_action": "rebind_wifi",
+      "fix_suggestion": "重新配置网关无线连接。"
+    },
+    {
+      "cause_key": "memory_exhausted",
+      "cause_name": "内存耗尽",
+      "description": "内存被异常占用耗尽，服务响应变慢直至重启。",
+      "prevalence": 0.06,
+      "investigation_weight": 3,
+      "fix_action": "restart_gateway",
+      "fix_suggestion": "重启网关释放内存并观察是否复现。"
+    },
+    {
+      "cause_key": "storage_full",
+      "cause_name": "存储空间占满",
+      "description": "存储被日志或缓存占满，本地服务异常。",
+      "prevalence": 0.08,
+      "investigation_weight": 4,
+      "fix_action": "free_storage",
+      "fix_suggestion": "清理缓存与过期日志释放空间。"
+    },
+    {
+      "cause_key": "flash_wear",
+      "cause_name": "flash存储磨损",
+      "description": "flash 写入寿命到期，出现数据损坏与重启。",
+      "prevalence": 0.02,
+      "investigation_weight": 1,
+      "fix_action": "replace_gateway_unit",
+      "fix_suggestion": "更换网关整机。"
+    },
+    {
+      "cause_key": "firmware_fault",
+      "cause_name": "固件异常",
+      "description": "固件缺陷导致重启循环或服务异常。",
+      "prevalence": 0.06,
+      "investigation_weight": 3,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "升级到最新稳定版固件。"
+    },
+    {
+      "cause_key": "update_package_corrupt",
+      "cause_name": "升级包损坏",
+      "description": "下载的升级包校验失败，升级中止。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "retry_update",
+      "fix_suggestion": "删除损坏包重新下载升级。"
+    },
+    {
+      "cause_key": "update_power_loss",
+      "cause_name": "升级中断电",
+      "description": "升级过程中断电，固件写入不完整。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "repair_firmware",
+      "fix_suggestion": "进入恢复模式重新刷写固件。"
+    },
+    {
+      "cause_key": "update_network_loss",
+      "cause_name": "升级中断网",
+      "description": "升级过程中网络中断，升级包不完整。",
+      "prevalence": 0.04,
+      "investigation_weight": 4,
+      "fix_action": "retry_update",
+      "fix_suggestion": "恢复稳定网络后重新升级。"
+    },
+    {
+      "cause_key": "zigbee_module_fault",
+      "cause_name": "Zigbee模块故障",
+      "description": "Zigbee 协调器模块损坏，子设备集体失联。",
+      "prevalence": 0.04,
+      "investigation_weight": 1,
+      "fix_action": "replace_gateway_unit",
+      "fix_suggestion": "更换网关或模块，建议售后处理。"
+    },
+    {
+      "cause_key": "antenna_loose",
+      "cause_name": "天线接触不良",
+      "description": "外置天线松动，无线覆盖范围骤降。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "fix_antenna",
+      "fix_suggestion": "重新拧紧天线接头。"
+    },
+    {
+      "cause_key": "poor_ventilation",
+      "cause_name": "散热不良",
+      "description": "网关封闭摆放散热差，持续高温。",
+      "prevalence": 0.08,
+      "investigation_weight": 4,
+      "fix_action": "improve_ventilation",
+      "fix_suggestion": "移至通风处摆放，避免堆叠遮挡。"
+    },
+    {
+      "cause_key": "dust_buildup",
+      "cause_name": "灰尘堆积",
+      "description": "散热孔积灰，散热效率下降导致过热。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "clean_dust",
+      "fix_suggestion": "断电后清理散热孔积灰。"
+    },
+    {
+      "cause_key": "surge_damage",
+      "cause_name": "雷击浪涌损坏",
+      "description": "雷击或浪涌冲击损坏电路，网关无法启动。",
+      "prevalence": 0.02,
+      "investigation_weight": 1,
+      "fix_action": "replace_gateway_unit",
+      "fix_suggestion": "更换网关并加装浪涌保护。"
+    },
+    {
+      "cause_key": "voltage_unstable",
+      "cause_name": "供电电压不稳",
+      "description": "电网电压波动导致网关异常重启。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "check_voltage",
+      "fix_suggestion": "检查供电电压，必要时使用稳压插座。"
+    },
+    {
+      "cause_key": "leakage_breaker_trip",
+      "cause_name": "漏保误动作断电",
+      "description": "回路漏电保护器跳闸，网关失电离线。",
+      "prevalence": 0.03,
+      "investigation_weight": 4,
+      "fix_action": "reset_breaker",
+      "fix_suggestion": "排查漏电原因后复位漏保。"
+    },
+    {
+      "cause_key": "timer_reboot_misconfig",
+      "cause_name": "定时重启配置错误",
+      "description": "定时重启任务间隔配置过短，形成重启循环。",
+      "prevalence": 0.05,
+      "investigation_weight": 5,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "修正或关闭定时重启任务。"
+    },
+    {
+      "cause_key": "cloud_outage",
+      "cause_name": "云端服务异常",
+      "description": "厂商云平台故障，云端同步与远程控制不可用。",
+      "prevalence": 0.08,
+      "investigation_weight": 4,
+      "fix_action": "wait_service",
+      "fix_suggestion": "等待云服务恢复，本地控制不受影响。"
+    },
+    {
+      "cause_key": "auth_failure",
+      "cause_name": "账号鉴权失败",
+      "description": "账号凭证校验失败，云端同步被拒。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "rebind_account",
+      "fix_suggestion": "重新登录并绑定网关。"
+    },
+    {
+      "cause_key": "token_expired",
+      "cause_name": "平台令牌过期",
+      "description": "接入令牌过期，云端连接被断开。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "rebind_account",
+      "fix_suggestion": "重新授权刷新令牌。"
+    },
+    {
+      "cause_key": "time_sync_fail",
+      "cause_name": "系统时间不同步",
+      "description": "网关时间漂移，证书校验与场景计划出错。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "sync_time",
+      "fix_suggestion": "恢复网络让网关自动校时。"
+    },
+    {
+      "cause_key": "ntp_fail",
+      "cause_name": "NTP校时失败",
+      "description": "NTP 服务不可达，网关时间无法校准。",
+      "prevalence": 0.03,
+      "investigation_weight": 3,
+      "fix_action": "sync_time",
+      "fix_suggestion": "检查网络后重启网关校时。"
+    },
+    {
+      "cause_key": "cert_expired",
+      "cause_name": "证书过期",
+      "description": "设备证书过期，云端 TLS 连接被拒绝。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "update_firmware",
+      "fix_suggestion": "升级固件更新内置证书。"
+    },
+    {
+      "cause_key": "mqtt_disconnect",
+      "cause_name": "MQTT连接异常",
+      "description": "与云端的 MQTT 长连接频繁断开。",
+      "prevalence": 0.07,
+      "investigation_weight": 3,
+      "fix_action": "restart_gateway",
+      "fix_suggestion": "重启网关重建长连接。"
+    },
+    {
+      "cause_key": "message_backlog",
+      "cause_name": "消息队列积压",
+      "description": "消息处理积压，指令排队导致响应变慢。",
+      "prevalence": 0.05,
+      "investigation_weight": 3,
+      "fix_action": "restart_gateway",
+      "fix_suggestion": "重启网关清空积压队列。"
+    },
+    {
+      "cause_key": "device_overload",
+      "cause_name": "子设备数量超载",
+      "description": "接入设备超出网关承载，响应变慢且部分掉线。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "reduce_devices",
+      "fix_suggestion": "减少子设备数量或升级更大容量网关。"
+    },
+    {
+      "cause_key": "routing_table_fault",
+      "cause_name": "Zigbee路由表异常",
+      "description": "路由表损坏，子设备通信路径失效。",
+      "prevalence": 0.04,
+      "investigation_weight": 2,
+      "fix_action": "restart_gateway",
+      "fix_suggestion": "重启网关重建路由表。"
+    },
+    {
+      "cause_key": "mesh_rebuild",
+      "cause_name": "网络重建中",
+      "description": "Mesh 网络正在自愈重建，通信短暂不稳。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "wait_service",
+      "fix_suggestion": "等待网络重建完成，期间避免操作。"
+    },
+    {
+      "cause_key": "router_node_offline",
+      "cause_name": "中继节点离线",
+      "description": "关键中继节点掉线，远端子设备链路中断。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "restart_router_node",
+      "fix_suggestion": "重启中继节点设备恢复链路。"
+    },
+    {
+      "cause_key": "channel_interference",
+      "cause_name": "2.4G信道干扰",
+      "description": "2.4G 频段拥挤，无线通信质量下降。",
+      "prevalence": 0.07,
+      "investigation_weight": 4,
+      "fix_action": "change_channel",
+      "fix_suggestion": "用信道分析工具换到空闲信道。"
+    },
+    {
+      "cause_key": "neighbor_channel_conflict",
+      "cause_name": "邻居WiFi信道拥挤",
+      "description": "周边 WiFi 信号密集同频干扰。",
+      "prevalence": 0.06,
+      "investigation_weight": 4,
+      "fix_action": "change_channel",
+      "fix_suggestion": "调整路由器与网关信道错开邻居网络。"
+    },
+    {
+      "cause_key": "dhcp_lease_expired",
+      "cause_name": "DHCP租约异常",
+      "description": "租约过期未续期，网关失去有效地址。",
+      "prevalence": 0.04,
+      "investigation_weight": 4,
+      "fix_action": "check_router",
+      "fix_suggestion": "重启路由器 DHCP 服务或设置地址保留。"
+    },
+    {
+      "cause_key": "router_firmware_fault",
+      "cause_name": "路由器固件异常",
+      "description": "上游路由器固件缺陷，连接不稳定。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "update_router",
+      "fix_suggestion": "升级路由器固件后重启。"
+    },
+    {
+      "cause_key": "switch_port_fault",
+      "cause_name": "交换机端口故障",
+      "description": "所接交换机端口损坏，链路不通。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "check_router",
+      "fix_suggestion": "更换交换机端口测试。"
+    },
+    {
+      "cause_key": "firewall_block",
+      "cause_name": "防火墙拦截",
+      "description": "防火墙拦截网关出站连接，云端不可达。",
+      "prevalence": 0.04,
+      "investigation_weight": 3,
+      "fix_action": "allow_ports",
+      "fix_suggestion": "在防火墙放行网关所需端口与域名。"
+    },
+    {
+      "cause_key": "security_software_block",
+      "cause_name": "安全软件拦截",
+      "description": "网络安全软件误拦网关云端通信。",
+      "prevalence": 0.02,
+      "investigation_weight": 3,
+      "fix_action": "allow_ports",
+      "fix_suggestion": "将网关加入安全软件白名单。"
+    },
+    {
+      "cause_key": "vpn_interference",
+      "cause_name": "VPN或代理干扰",
+      "description": "网络层 VPN 或代理改变路由，云端连接异常。",
+      "prevalence": 0.03,
+      "investigation_weight": 4,
+      "fix_action": "disable_vpn",
+      "fix_suggestion": "临时关闭 VPN 或代理后测试。"
+    },
+    {
+      "cause_key": "hardware_aging",
+      "cause_name": "硬件老化",
+      "description": "网关使用多年性能衰减，稳定性下降。",
+      "prevalence": 0.03,
+      "investigation_weight": 1,
+      "fix_action": "replace_gateway_unit",
+      "fix_suggestion": "评估更换新网关。"
+    },
+    {
+      "cause_key": "board_capacitor_swollen",
+      "cause_name": "主板电容鼓包",
+      "description": "主板电容鼓包失效，供电异常反复重启。",
+      "prevalence": 0.02,
+      "investigation_weight": 1,
+      "fix_action": "replace_gateway_unit",
+      "fix_suggestion": "更换网关主板或整机。"
+    },
+    {
+      "cause_key": "cold_solder_joint",
+      "cause_name": "焊点虚焊",
+      "description": "制造焊点虚焊，受热后接触不良。",
+      "prevalence": 0.01,
+      "investigation_weight": 1,
+      "fix_action": "replace_gateway_unit",
+      "fix_suggestion": "保修期内送修或更换整机。"
+    },
+    {
+      "cause_key": "led_driver_fault",
+      "cause_name": "指示灯驱动故障",
+      "description": "指示灯电路故障，仅灯显异常不影响功能。",
+      "prevalence": 0.03,
+      "investigation_weight": 4,
+      "fix_action": "replace_gateway_unit",
+      "fix_suggestion": "确认功能正常后可择期更换设备。"
+    },
+    {
+      "cause_key": "sd_card_fault",
+      "cause_name": "存储卡损坏",
+      "description": "外置存储卡损坏，本地存储服务启动失败。",
+      "prevalence": 0.02,
+      "investigation_weight": 2,
+      "fix_action": "replace_sd_card",
+      "fix_suggestion": "更换存储卡并重新初始化。"
+    },
+    {
+      "cause_key": "log_full",
+      "cause_name": "日志写满未轮转",
+      "description": "日志未轮转写满存储，系统性能下降。",
+      "prevalence": 0.05,
+      "investigation_weight": 4,
+      "fix_action": "clear_logs",
+      "fix_suggestion": "清理历史日志并开启轮转策略。"
+    },
+    {
+      "cause_key": "config_corrupt",
+      "cause_name": "配置文件损坏",
+      "description": "配置文件损坏，本地服务启动异常。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "restore_config",
+      "fix_suggestion": "恢复出厂配置后重新导入备份。"
+    },
+    {
+      "cause_key": "local_port_conflict",
+      "cause_name": "本地服务端口冲突",
+      "description": "局域网内其他服务占用同一端口，本地控制失败。",
+      "prevalence": 0.02,
+      "investigation_weight": 3,
+      "fix_action": "adjust_settings",
+      "fix_suggestion": "排查冲突服务并修改端口。"
+    },
+    {
+      "cause_key": "local_storage_engine_fail",
+      "cause_name": "本地数据库异常",
+      "description": "本地数据库损坏，本地联动与控制失效。",
+      "prevalence": 0.03,
+      "investigation_weight": 2,
+      "fix_action": "restore_config",
+      "fix_suggestion": "重建本地数据库并恢复备份。"
+    }
+  ],
+  "symptom_causes": [
+    {
+      "symptom": "gw_offline",
+      "causes": [
+        "power_cable_loose", "ethernet_loose", "upstream_router_down", "isp_outage",
+        "dns_fault", "ip_conflict", "gw_wifi_disconnected", "token_expired",
+        "voltage_unstable", "leakage_breaker_trip", "dhcp_lease_expired",
+        "router_firmware_fault", "switch_port_fault", "firewall_block"
+      ]
+    },
+    {
+      "symptom": "gw_all_devices_offline",
+      "causes": [
+        "zigbee_module_fault", "antenna_loose", "device_overload",
+        "routing_table_fault", "mesh_rebuild", "surge_damage", "router_node_offline"
+      ]
+    },
+    {
+      "symptom": "gw_pair_fail",
+      "causes": [
+        "zigbee_module_fault", "channel_interference", "neighbor_channel_conflict",
+        "router_node_offline"
+      ]
+    },
+    {
+      "symptom": "gw_slow_response",
+      "causes": [
+        "memory_exhausted", "storage_full", "firmware_fault", "cloud_outage",
+        "mqtt_disconnect", "message_backlog", "device_overload", "routing_table_fault",
+        "mesh_rebuild", "channel_interference", "neighbor_channel_conflict",
+        "vpn_interference", "hardware_aging", "router_node_offline", "log_full"
+      ]
+    },
+    {
+      "symptom": "gw_reboot_loop",
+      "causes": [
+        "power_adapter_fault", "power_cable_loose", "thermal_protection",
+        "memory_exhausted", "flash_wear", "firmware_fault", "voltage_unstable",
+        "timer_reboot_misconfig", "hardware_aging", "board_capacitor_swollen",
+        "cold_solder_joint", "config_corrupt"
+      ]
+    },
+    {
+      "symptom": "gw_led_abnormal",
+      "causes": ["led_driver_fault", "firmware_fault"]
+    },
+    {
+      "symptom": "gw_local_control_fail",
+      "causes": ["firmware_fault", "config_corrupt", "local_port_conflict", "local_storage_engine_fail"]
+    },
+    {
+      "symptom": "gw_cloud_sync_fail",
+      "causes": [
+        "ethernet_loose", "upstream_router_down", "dns_fault", "ip_conflict",
+        "cloud_outage", "auth_failure", "token_expired", "time_sync_fail", "ntp_fail",
+        "cert_expired", "mqtt_disconnect", "router_firmware_fault", "firewall_block",
+        "security_software_block", "vpn_interference"
+      ]
+    },
+    {
+      "symptom": "gw_scene_fail",
+      "causes": [
+        "storage_full", "firmware_fault", "message_backlog", "time_sync_fail",
+        "ntp_fail", "config_corrupt", "local_storage_engine_fail"
+      ]
+    },
+    {
+      "symptom": "gw_storage_fault",
+      "causes": ["storage_full", "flash_wear", "sd_card_fault", "log_full"]
+    },
+    {
+      "symptom": "gw_overheat",
+      "causes": ["thermal_protection", "poor_ventilation", "dust_buildup"]
+    },
+    {
+      "symptom": "gw_no_boot",
+      "causes": [
+        "power_adapter_fault", "power_cable_loose", "surge_damage",
+        "leakage_breaker_trip", "update_power_loss", "board_capacitor_swollen",
+        "cold_solder_joint", "sd_card_fault"
+      ]
+    },
+    {
+      "symptom": "gw_firmware_update_fail",
+      "causes": ["update_package_corrupt", "update_power_loss", "update_network_loss"]
+    }
+  ]
+}
