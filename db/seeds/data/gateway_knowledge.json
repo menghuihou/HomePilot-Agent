@@ -13,7 +13,8 @@
     {"symptom_key": "gw_storage_fault", "description": "存储空间告警或日志异常"},
     {"symptom_key": "gw_overheat", "description": "机身温度明显过高"},
     {"symptom_key": "gw_no_boot", "description": "无法启动或指示灯全灭"},
-    {"symptom_key": "gw_firmware_update_fail", "description": "固件升级失败"}
+    {"symptom_key": "gw_firmware_update_fail", "description": "固件升级失败"},
+    {"symptom_key": "device_abnormal", "description": "设备异常，具体症状待确认"}
   ],
   "causes": [
     {
@@ -579,6 +580,27 @@
     {
       "symptom": "gw_firmware_update_fail",
       "causes": ["update_package_corrupt", "update_power_loss", "update_network_loss"]
+    },
+    {
+      "symptom": "device_abnormal",
+      "causes": [
+        "power_adapter_fault", "power_cable_loose", "thermal_protection",
+        "ethernet_loose", "upstream_router_down", "isp_outage", "dns_fault",
+        "ip_conflict", "gw_wifi_disconnected", "memory_exhausted", "storage_full",
+        "flash_wear", "firmware_fault", "update_package_corrupt",
+        "update_power_loss", "update_network_loss", "zigbee_module_fault",
+        "antenna_loose", "poor_ventilation", "dust_buildup", "surge_damage",
+        "voltage_unstable", "leakage_breaker_trip", "timer_reboot_misconfig",
+        "cloud_outage", "auth_failure", "token_expired", "time_sync_fail",
+        "ntp_fail", "cert_expired", "mqtt_disconnect", "message_backlog",
+        "device_overload", "routing_table_fault", "mesh_rebuild",
+        "router_node_offline", "channel_interference", "neighbor_channel_conflict",
+        "dhcp_lease_expired", "router_firmware_fault", "switch_port_fault",
+        "firewall_block", "security_software_block", "vpn_interference",
+        "hardware_aging", "board_capacitor_swollen", "cold_solder_joint",
+        "led_driver_fault", "sd_card_fault", "log_full", "config_corrupt",
+        "local_port_conflict", "local_storage_engine_fail"
+      ]
     }
   ]
 }

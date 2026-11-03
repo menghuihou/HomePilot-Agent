@@ -14,7 +14,8 @@
     {"symptom_key": "sensor_temp_humi_inaccurate", "description": "温湿度读数不准"},
     {"symptom_key": "sensor_pair_fail", "description": "配对或入网失败"},
     {"symptom_key": "sensor_report_delay", "description": "数据上报明显延迟"},
-    {"symptom_key": "sensor_duplicate_report", "description": "同一事件重复上报"}
+    {"symptom_key": "sensor_duplicate_report", "description": "同一事件重复上报"},
+    {"symptom_key": "device_abnormal", "description": "设备异常，具体症状待确认"}
   ],
   "causes": [
     {
@@ -576,6 +577,28 @@
     {
       "symptom": "sensor_duplicate_report",
       "causes": ["firmware_fault", "timestamp_drift", "duplicate_dispatch", "watchdog_reset"]
+    },
+    {
+      "symptom": "device_abnormal",
+      "causes": [
+        "battery_dead", "battery_contact_loose", "low_battery_degrade",
+        "weak_signal", "gateway_offline", "zigbee_interference",
+        "wifi_disconnected", "firmware_fault", "firmware_update_interrupted",
+        "humidity_drift", "element_aging", "probe_contaminated", "placement_poor",
+        "sunlight_exposure", "near_heat_source", "door_magnet_gap",
+        "magnet_detached", "pir_blocked", "pir_temp_comp_fail", "pet_false_trigger",
+        "curtain_airflow", "water_probe_corroded", "water_probe_detached",
+        "dew_false_alarm", "high_report_rate_drain", "wake_strategy_fault",
+        "timestamp_drift", "cache_not_refreshed", "report_interval_long",
+        "pair_timeout", "paired_elsewhere", "device_asleep", "key_invalid",
+        "account_unbound", "cloud_rule_missing", "local_scene_fail",
+        "router_node_fault", "mesh_rebuild", "emi_interference",
+        "metal_shielding", "moisture_ingress", "temp_out_of_range",
+        "drop_damage", "adc_sampling_fault", "calibration_lost",
+        "factory_mode_left_on", "threshold_misconfig", "unit_misconfig",
+        "duplicate_dispatch", "watchdog_reset", "battery_type_mismatch",
+        "antenna_damage"
+      ]
     }
   ]
 }

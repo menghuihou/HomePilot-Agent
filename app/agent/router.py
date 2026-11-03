@@ -12,6 +12,7 @@ from langfuse import get_client, observe
 from pydantic import BaseModel
 
 from app.agent.context import HOME_MODE_KEY, HomeContext
+from app.agent.state import last_human_message
 from app.llm_client import build_chat_model, default_model_name
 
 Intent = Literal["chat", "control", "diagnose", "inspect", "home_mode"]
@@ -65,14 +66,6 @@ def summarize_home_context(context: HomeContext) -> str:
     ]
     lines.append("偏好：" + ("；".join(prefs) or "无"))
     return "\n".join(lines)
-
-
-def _last_human_message(messages: list[BaseMessage]) -> BaseMessage | None:
-    """取最新一条用户消息；Router 只对它分类，避免历史消息干扰判断。"""
-    for message in reversed(messages):
-        if getattr(message, "type", "") == "human":
-            return message
-    return None
 
 
 def _dialog_window(messages: list[BaseMessage]) -> list[BaseMessage]:
@@ -129,7 +122,7 @@ async def classify_intent(
     chat_model=None,
 ) -> str:
     """判定用户消息意图；LLM 输出非法或调用失败时兜底为 chat。"""
-    target = _last_human_message(messages)
+    target = last_human_message(messages)
     if target is None:
         return "chat"
     model = chat_model or build_chat_model()

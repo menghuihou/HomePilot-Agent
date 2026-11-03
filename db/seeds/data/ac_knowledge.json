@@ -14,7 +14,8 @@
     {"symptom_key": "ac_energy_spike", "description": "能耗异常升高"},
     {"symptom_key": "ac_freezing", "description": "蒸发器或管路结霜"},
     {"symptom_key": "ac_display_fault", "description": "面板显示异常或报错代码"},
-    {"symptom_key": "ac_auto_mode_switch", "description": "模式未经操作自行切换"}
+    {"symptom_key": "ac_auto_mode_switch", "description": "模式未经操作自行切换"},
+    {"symptom_key": "device_abnormal", "description": "设备异常，具体症状待确认"}
   ],
   "causes": [
     {
@@ -617,6 +618,30 @@
       "causes": [
         "temp_sensor_fault", "indoor_outdoor_comm_fault", "timer_misconfig",
         "firmware_fault", "firmware_update_needed"
+      ]
+    },
+    {
+      "symptom": "device_abnormal",
+      "causes": [
+        "refrigerant_leak", "refrigerant_low", "compressor_fault",
+        "compressor_capacitor_fault", "four_way_valve_fault", "evaporator_frost",
+        "condenser_dirty", "filter_clogged", "fan_motor_fault",
+        "fan_capacitor_fault", "drain_pump_fault", "drain_pipe_clog",
+        "water_pan_cracked", "installation_tilt", "temp_sensor_fault",
+        "pipe_sensor_fault", "main_board_fault", "display_board_fault",
+        "voltage_abnormal", "low_pressure_protection", "high_pressure_protection",
+        "overcurrent_protection", "comm_wire_fault", "indoor_outdoor_comm_fault",
+        "settings_error", "child_lock_on", "sleep_mode_confusion",
+        "timer_misconfig", "gateway_offline", "wifi_module_fault",
+        "wifi_disconnected", "cloud_outage", "firmware_fault",
+        "firmware_update_needed", "remote_battery_dead", "ir_receiver_fault",
+        "ir_path_blocked", "outdoor_unit_dirty", "outdoor_bracket_loose",
+        "fan_blade_deformed", "bearing_worn", "compressor_liquid_floodback",
+        "humidity_condensation", "insulation_damaged", "drain_slope_insufficient",
+        "refrigerant_micro_leak", "room_seal_poor", "heat_load_high",
+        "aux_heat_off", "electric_heater_fault", "air_inlet_blocked",
+        "odor_source_internal", "heat_exchanger_dirty", "energy_meter_error",
+        "ambient_sensor_drift"
       ]
     }
   ]

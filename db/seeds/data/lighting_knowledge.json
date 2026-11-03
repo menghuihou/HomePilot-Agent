@@ -16,7 +16,8 @@
     {"symptom_key": "light_group_diff_sync", "description": "同一群组内多灯状态不同步"},
     {"symptom_key": "light_buzz", "description": "工作时发出嗡嗡或滋滋异响"},
     {"symptom_key": "light_overheat", "description": "灯具或驱动表面过热"},
-    {"symptom_key": "light_remote_fail", "description": "遥控器控制灯失效"}
+    {"symptom_key": "light_remote_fail", "description": "遥控器控制灯失效"},
+    {"symptom_key": "device_abnormal", "description": "设备异常，具体症状待确认"}
   ],
   "causes": [
     {
@@ -671,6 +672,30 @@
     {
       "symptom": "light_remote_fail",
       "causes": ["remote_battery_dead", "remote_unpaired", "ir_receiver_fault"]
+    },
+    {
+      "symptom": "device_abnormal",
+      "causes": [
+        "bulb_burned", "driver_failure", "breaker_tripped", "power_outage",
+        "switch_fault", "socket_loose", "wiring_break", "voltage_unstable",
+        "gateway_offline", "device_offline", "wifi_disconnected", "weak_signal",
+        "firmware_fault", "firmware_update_needed", "timer_misconfig",
+        "scene_conflict", "automation_misfire", "token_expired",
+        "dimmer_incompatible", "led_aging", "capacitor_aging", "relay_fault",
+        "wiring_reversed", "cloud_outage", "voice_recognition_error",
+        "remote_battery_dead", "remote_unpaired", "ir_receiver_fault",
+        "group_misconfig", "zigbee_channel_conflict", "shade_dirty",
+        "poor_heat_dissipation", "color_sensor_drift", "pwm_signal_fault",
+        "switch_overload", "wrong_bulb_type", "double_control_conflict",
+        "neutral_line_fault", "lamp_holder_aging", "driver_overheat",
+        "wifi_router_reboot", "dhcp_fault", "ip_conflict", "cloud_rate_limit",
+        "ntp_time_skew", "scene_data_missing", "voice_account_mismatch",
+        "mesh_rebuild", "bulb_type_mismatch_dimming", "led_dead_section",
+        "driver_audible_noise", "loose_fixture", "thermal_throttle",
+        "color_temp_sensor_dirty", "app_cache_stale", "firmware_beta_bug",
+        "emergency_mode", "room_switch_independent", "driver_output_fluctuation",
+        "socket_carbonization"
+      ]
     }
   ]
 }
