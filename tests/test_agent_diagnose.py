@@ -44,11 +44,11 @@ def _create_device(client, home_id: int, name: str, device_type: str) -> int:
     return resp.json()["id"]
 
 
-def _run_extract(home_id: int, text: str, model):
+def _run_extract(home_id: int, text: str, model, investigator=None):
     """独立引擎运行诊断子图；结束后同循环销毁，避免连接池跨事件循环复用。"""
     engine = create_async_engine(get_settings().database_url)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
-    graph = build_diagnose_graph(chat_model=model)
+    graph = build_diagnose_graph(chat_model=model, investigator=investigator)
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
     try:
@@ -65,6 +65,18 @@ def _run_extract(home_id: int, text: str, model):
         return asyncio.run(_run())
     finally:
         monkeypatch.undo()
+
+
+def _scripted_investigator(script: dict[str, list[str]]):
+    """按层返回固定证据的排查器桩，并记录调用轨迹供轮次断言。"""
+    calls: list[str] = []
+
+    async def _investigate(layer: str, symptom: dict, home_id: int) -> list[str]:
+        calls.append(layer)
+        return script.get(layer, [])
+
+    _investigate.calls = calls
+    return _investigate
 
 
 def test_extract_resolves_valid_slots(client, home_id):
@@ -121,7 +133,7 @@ def test_extract_falls_back_on_unknown_symptom_key(client, home_id):
         SymptomSlots(device_name="客厅灯", room="客厅", symptom_key="made_up_key")
     )
 
-    result = _run_extract(home_id, "客厅灯怪怪的", model)
+    result = _run_extract(home_id, "客厅灯怪怪的", model, _scripted_investigator({}))
 
     symptom = result["symptom"]
     assert symptom["symptom_key"] == FALLBACK_SYMPTOM_KEY
@@ -135,7 +147,7 @@ def test_extract_falls_back_when_model_returns_none(client, home_id):
     _create_device(client, home_id, "客厅灯", "light")
     model = StubExtractionModel(None)
 
-    result = _run_extract(home_id, "客厅灯不亮了", model)
+    result = _run_extract(home_id, "客厅灯不亮了", model, _scripted_investigator({}))
 
     symptom = result["symptom"]
     assert symptom["symptom_key"] == FALLBACK_SYMPTOM_KEY
@@ -155,3 +167,75 @@ def test_extract_falls_back_on_unknown_device(client, home_id):
     assert symptom["domain"] == "unknown"
     assert symptom["device_name"] == "不存在的设备"
     assert symptom["fallback"] is True
+
+
+def test_investigation_converges_in_one_round(client, home_id):
+    """灯不亮 + 离线证据：交集唯一候选 power_outage 达高置信 → 1 轮收敛。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubExtractionModel(
+        SymptomSlots(device_name="客厅灯", symptom_key="light_not_on")
+    )
+    investigator = _scripted_investigator(
+        {"device_status": ["light_offline"], "device_events": [], "gateway_status": []}
+    )
+
+    result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+
+    assert result["investigation_round"] == 1
+    assert result["observed_evidence"] == ["light_offline"]
+    top = result["candidate_hypotheses"][0]
+    assert top["cause_key"] == "power_outage"
+    assert top["matched_evidence_count"] == 2
+    assert investigator.calls == ["device_status"]
+
+
+def test_investigation_shrinks_leader_to_two_in_two_rounds(client, home_id):
+    """总计划场景：兜底候选全集 → 2 轮区分性证据后领先组收缩到 ≤ 2。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubExtractionModel(
+        SymptomSlots(device_name="客厅灯", symptom_key="device_abnormal")
+    )
+    investigator = _scripted_investigator(
+        {"device_status": ["light_buzz"], "device_events": ["light_overheat"]}
+    )
+
+    result = _run_extract(home_id, "客厅灯不太对劲", model, investigator)
+
+    assert result["investigation_round"] == 2
+    assert result["observed_evidence"] == ["light_buzz", "light_overheat"]
+    top_two = {h["cause_key"] for h in result["candidate_hypotheses"][:2]}
+    assert top_two == {"switch_overload", "socket_carbonization"}
+    assert all(
+        h["matched_evidence_count"] == 3 for h in result["candidate_hypotheses"][:2]
+    )
+    assert investigator.calls == ["device_status", "device_events"]
+
+
+def test_investigation_hard_cap_forces_conclusion(client, home_id):
+    """三轮均无区分性证据：硬上限强制收口（结论节点属第 7 步）。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubExtractionModel(
+        SymptomSlots(device_name="客厅灯", symptom_key="light_not_on")
+    )
+    investigator = _scripted_investigator({})
+
+    result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+
+    assert result["investigation_round"] == 3
+    assert result["observed_evidence"] == []
+    assert investigator.calls == ["device_status", "device_events", "gateway_status"]
+    assert result.get("final_diagnosis") is None
+
+
+def test_unknown_domain_skips_investigation(client, home_id):
+    """未知域无候选：跳过排查循环，直接进入结论准备。"""
+    model = StubExtractionModel(
+        SymptomSlots(device_name="不存在的设备", symptom_key="device_abnormal")
+    )
+    investigator = _scripted_investigator({})
+
+    result = _run_extract(home_id, "不存在的设备坏了", model)
+
+    assert result["candidate_hypotheses"] == []
+    assert result["investigation_round"] == 0
+    assert investigator.calls == []
