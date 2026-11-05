@@ -9,11 +9,12 @@ checkpointer 断点续跑可序列化。
 """
 
 import asyncio
+import json
 import logging
 import operator
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langfuse import get_client, observe
 from langgraph.graph import END, START, StateGraph
@@ -22,6 +23,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.agent.hypotheses import (
+    build_final_diagnosis,
     compute_hypotheses,
     select_actions,
     should_conclude,
@@ -65,6 +67,27 @@ _EXTRACTION_SYSTEM_PROMPT = """你是家庭智能助手的故障诊断前处理�
 {symptom_dict}
 """
 
+_REPORT_SYSTEM_PROMPT = """你是诊断报告转写器。给你一份结构化诊断结论（JSON），把它转写成给用户看的中文诊断报告。
+
+规则：
+- 只转写给定结论与建议，不得新增、删除或改变任何结论；
+- primary_cause_key 字段必须原样复述输入 JSON 中的同名取值（输入为
+  null 则输出 null），不得改动或编造；
+- 措辞使用「可能」「建议检查」「建议观察」等非断言表达，
+  禁止出现「一定」「必然」「肯定是」「已修复」等过度断言词；
+- 先说结论，再说依据证据，最后说建议，全文 150 字以内。"""
+
+# 过度断言词的确定性替换表：长词在前，避免子串二次命中。
+ASSERTION_REPLACEMENTS: tuple[tuple[str, str], ...] = (
+    ("一定是", "可能是"),
+    ("肯定是", "可能是"),
+    ("必然是", "可能是"),
+    ("绝对是", "可能是"),
+    ("必然", "可能"),
+    ("已修复", "建议检查"),
+    ("坏了", "故障"),
+)
+
 
 class DiagnoseState(TypedDict):
     """诊断子图状态：与主图共享 messages / home_id，其余为子图私有。
@@ -91,6 +114,13 @@ class SymptomSlots(BaseModel):
     device_name: str
     room: str = ""
     symptom_key: str
+
+
+class DiagnosisReport(BaseModel):
+    """诊断报告的结构化输出：转写文本 + 复述主结论 key（供越权校验）。"""
+
+    report: str
+    primary_cause_key: str | None = None
 
 
 def _format_symptom_dictionary(rows: list[FaultSymptom]) -> str:
@@ -212,6 +242,60 @@ async def default_investigator(layer: str, symptom: dict, home_id: int) -> list[
     return []
 
 
+def _filter_assertions(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """过度断言词确定性替换；返回 (过滤后文本, 替换记录)。"""
+    replaced: list[tuple[str, str]] = []
+    filtered = text
+    for old, new in ASSERTION_REPLACEMENTS:
+        if old in filtered:
+            filtered = filtered.replace(old, new)
+            replaced.append((old, new))
+    return filtered, replaced
+
+
+@observe(name="wording-filter")
+def _apply_wording_filter(text: str) -> str:
+    """措辞过滤观测点：替换事件通过 metadata 进入当前 trace。"""
+    filtered, replacements = _filter_assertions(text)
+    if replacements:
+        get_client().update_current_span(
+            metadata={"assertion_replacements": replacements}
+        )
+    return filtered
+
+
+@observe(name="report-fallback")
+def _rule_template_report(diagnosis: dict) -> str:
+    """LLM 失败或越权时的规则模板报告（fallback 事件进 trace）。"""
+    get_client().update_current_span(metadata={"report_fallback": True})
+    if diagnosis["status"] == "concluded":
+        alternative_names = "；".join(
+            alternative["cause_name"] for alternative in diagnosis["alternatives"]
+        )
+        alternative_text = (
+            f"（其他可能：{alternative_names}）" if alternative_names else ""
+        )
+        return (
+            f"根据排查，你描述的问题可能由{diagnosis['primary_cause_name']}导致，"
+            f"建议：{diagnosis['fix_suggestion']}{alternative_text}"
+        )
+    return (
+        f"经过 {diagnosis['investigation_rounds']} 轮排查未能定位具体原因，"
+        f"{diagnosis['fix_suggestion']}"
+    )
+
+
+@observe(as_type="generation", name="diagnosis-report")
+async def _invoke_report(model, prompt_messages: list, config=None):
+    """调用 LLM 转写诊断报告；None/解析失败由 report 节点兜底为模板。"""
+    report = await model.with_structured_output(DiagnosisReport).ainvoke(
+        prompt_messages, config=config
+    )
+    # with_structured_output 不回填模型名，Langfuse generation 里手动补上。
+    get_client().update_current_generation(model=default_model_name())
+    return report
+
+
 @observe(as_type="generation", name="symptom-extract")
 async def _invoke_extraction(model, prompt_messages: list, config=None):
     """调用 LLM 抽取症状槽位；None/解析失败由 extract_symptom 兜底。"""
@@ -225,9 +309,9 @@ async def _invoke_extraction(model, prompt_messages: list, config=None):
 
 @observe(name="symptom-resolve")
 def _resolve_symptom(
-        slots: SymptomSlots | None,
-        devices: list,
-        valid_keys: dict[str, set[str]],
+    slots: SymptomSlots | None,
+    devices: list,
+    valid_keys: dict[str, set[str]],
 ) -> dict:
     """确定性解析：设备匹配 → 域映射 → symptom_key 知识库验证。
 
@@ -301,8 +385,8 @@ def build_diagnose_graph(chat_model=None, investigator=None):
             slots = None
         else:
             device_list = (
-                    "、".join(f"{d.name}(id={d.id}, {d.device_type})" for d in devices)
-                    or "无"
+                "、".join(f"{d.name}(id={d.id}, {d.device_type})" for d in devices)
+                or "无"
             )
             system_prompt = _EXTRACTION_SYSTEM_PROMPT.format(
                 device_list=device_list,
@@ -363,25 +447,73 @@ def build_diagnose_graph(chat_model=None, investigator=None):
 
     def _after_compute(state: DiagnoseState) -> str:
         # 未知域无候选可排查，直接出结论（第 7 步的结论节点）。
-        return "investigate" if state.get("candidate_hypotheses") else END
+        return "investigate" if state.get("candidate_hypotheses") else "conclude"
 
     def _after_investigate(state: DiagnoseState) -> str:
         if should_conclude(
-                state.get("candidate_hypotheses") or [], state.get("investigation_round", 0)
+            state.get("candidate_hypotheses") or [], state.get("investigation_round", 0)
         ):
-            return END
+            return "conclude"
         return "investigate"
+
+    async def _conclude(state: DiagnoseState, config) -> dict:
+        """确定性结论：领先候选为主结论；无区分性证据则建议人工介入。"""
+        diagnosis = build_final_diagnosis(
+            state.get("candidate_hypotheses") or [],
+            list(state.get("observed_evidence") or []),
+            state.get("investigation_round", 0),
+        )
+        return {"final_diagnosis": diagnosis}
+
+    async def _report(state: DiagnoseState, config) -> dict:
+        """LLM 转写诊断报告；失败或越权结论一律回退规则模板并过滤措辞。"""
+        diagnosis = dict(state.get("final_diagnosis") or {})
+        payload = json.dumps(diagnosis, ensure_ascii=False)
+        try:
+            model = chat_model or build_chat_model()
+            report = await _invoke_report(
+                model,
+                [
+                    SystemMessage(content=_REPORT_SYSTEM_PROMPT),
+                    HumanMessage(content=payload),
+                ],
+                config=config,
+            )
+        except Exception:
+            logger.warning("诊断报告转写失败，使用规则模板", exc_info=True)
+            report = None
+        # 越权守卫：输出 schema 不对或复述的结论 key 与输入不一致，
+        # 说明 LLM 新增/篡改了结论，丢弃转写文本回退模板。
+        if (
+            not isinstance(report, DiagnosisReport)
+            or report.primary_cause_key != diagnosis["primary_cause_key"]
+        ):
+            if report is not None:
+                logger.warning("诊断报告越权或结论不一致，已回退规则模板")
+            report = None
+        text = (
+            _apply_wording_filter(report.report)
+            if report is not None
+            else _apply_wording_filter(_rule_template_report(diagnosis))
+        )
+        diagnosis["report"] = text
+        # 报告追加 AI 消息：挂进主图后由 to_answer 取正文返回。
+        return {"final_diagnosis": diagnosis, "messages": [AIMessage(content=text)]}
 
     builder = StateGraph(DiagnoseState)
     builder.add_node("extract_symptom", extract_symptom)
     builder.add_node("compute_hypotheses", _compute_candidates)
     builder.add_node("investigate", _investigate_round)
+    builder.add_node("conclude", _conclude)
+    builder.add_node("report", _report)
     builder.add_edge(START, "extract_symptom")
     builder.add_edge("extract_symptom", "compute_hypotheses")
     builder.add_conditional_edges(
-        "compute_hypotheses", _after_compute, ["investigate", END]
+        "compute_hypotheses", _after_compute, ["investigate", "conclude"]
     )
     builder.add_conditional_edges(
-        "investigate", _after_investigate, ["investigate", END]
+        "investigate", _after_investigate, ["investigate", "conclude"]
     )
+    builder.add_edge("conclude", "report")
+    builder.add_edge("report", END)
     return builder.compile()

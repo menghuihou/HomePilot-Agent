@@ -156,3 +156,59 @@ def select_actions(hypotheses: list[dict], top_n: int = 3) -> list[dict]:
             }
         )
     return actions
+
+
+def build_final_diagnosis(
+    hypotheses: list[dict],
+    observed_evidence: list[str],
+    investigation_round: int,
+) -> dict:
+    """确定性生成最终诊断结论；报告文本由后续转写节点填充。
+
+    - top-1 命中数达高置信阈值 → status=concluded，附证据与修复建议；
+    - 否则（空候选或无区分性证据）→ status=unresolved，建议人工介入。
+    结论字段全部为 JSON 原生类型，可安全进入 checkpointer 状态。
+    """
+    alternatives = [
+        {
+            "cause_key": h["cause_key"],
+            "cause_name": h["cause_name"],
+            "fix_suggestion": h["fix_suggestion"],
+        }
+        for h in hypotheses[1:3]
+    ]
+    if (
+        hypotheses
+        and hypotheses[0]["matched_evidence_count"] >= HIGH_CONFIDENCE_THRESHOLD
+    ):
+        primary = hypotheses[0]
+        return {
+            "status": "concluded",
+            "primary_cause_key": primary["cause_key"],
+            "primary_cause_name": primary["cause_name"],
+            "primary_description": primary["description"],
+            "evidence": list(observed_evidence),
+            "matched_symptom_keys": list(primary["matched_symptom_keys"]),
+            "fix_action": primary["fix_action"],
+            "fix_suggestion": primary["fix_suggestion"],
+            "alternatives": alternatives,
+            "investigation_rounds": investigation_round,
+            "report": "",
+        }
+    return {
+        "status": "unresolved",
+        "primary_cause_key": None,
+        "primary_cause_name": None,
+        "primary_description": (
+            "未能定位具体原因，建议人工介入进一步检查。"
+            if hypotheses
+            else "未能识别设备或症状，建议人工介入进一步检查。"
+        ),
+        "evidence": list(observed_evidence),
+        "matched_symptom_keys": [],
+        "fix_action": None,
+        "fix_suggestion": "建议联系人工介入排查。",
+        "alternatives": alternatives,
+        "investigation_rounds": investigation_round,
+        "report": "",
+    }

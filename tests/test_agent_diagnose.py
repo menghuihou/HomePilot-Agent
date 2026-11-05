@@ -11,7 +11,13 @@ from langchain_core.messages import HumanMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.agent.diagnose as diagnose_module
-from app.agent.diagnose import FALLBACK_SYMPTOM_KEY, SymptomSlots, build_diagnose_graph
+from app.agent.diagnose import (
+    FALLBACK_SYMPTOM_KEY,
+    DiagnosisReport,
+    SymptomSlots,
+    _filter_assertions,
+    build_diagnose_graph,
+)
 from app.config import get_settings
 
 
@@ -34,6 +40,32 @@ class StubExtractionModel:
                 return stub._slots
 
         return _Structured()
+
+
+class StubDiagnosisModel:
+    """按 schema 分发固定输出的桩：抽取用 SymptomSlots，报告用 DiagnosisReport。"""
+
+    def __init__(self, slots: SymptomSlots, report: DiagnosisReport | None):
+        self._slots = slots
+        self._report = report
+        self.report_prompts: list[list] = []
+
+    def with_structured_output(self, schema):
+        stub = self
+        if schema is DiagnosisReport:
+
+            class _Report:
+                async def ainvoke(self, messages, config=None):
+                    stub.report_prompts.append(list(messages))
+                    return stub._report
+
+            return _Report()
+
+        class _Slots:
+            async def ainvoke(self, messages, config=None):
+                return stub._slots
+
+        return _Slots()
 
 
 def _create_device(client, home_id: int, name: str, device_type: str) -> int:
@@ -187,6 +219,11 @@ def test_investigation_converges_in_one_round(client, home_id):
     assert top["cause_key"] == "power_outage"
     assert top["matched_evidence_count"] == 2
     assert investigator.calls == ["device_status"]
+    # 结论节点产出 concluded 结论；报告文本由模板兜底（该测试桩不含报告）。
+    diagnosis = result["final_diagnosis"]
+    assert diagnosis["status"] == "concluded"
+    assert diagnosis["primary_cause_key"] == "power_outage"
+    assert diagnosis["report"]
 
 
 def test_investigation_shrinks_leader_to_two_in_two_rounds(client, home_id):
@@ -209,6 +246,7 @@ def test_investigation_shrinks_leader_to_two_in_two_rounds(client, home_id):
         h["matched_evidence_count"] == 3 for h in result["candidate_hypotheses"][:2]
     )
     assert investigator.calls == ["device_status", "device_events"]
+    assert result["final_diagnosis"]["status"] == "concluded"
 
 
 def test_investigation_hard_cap_forces_conclusion(client, home_id):
@@ -224,7 +262,10 @@ def test_investigation_hard_cap_forces_conclusion(client, home_id):
     assert result["investigation_round"] == 3
     assert result["observed_evidence"] == []
     assert investigator.calls == ["device_status", "device_events", "gateway_status"]
-    assert result.get("final_diagnosis") is None
+    diagnosis = result["final_diagnosis"]
+    assert diagnosis["status"] == "unresolved"
+    assert "人工" in diagnosis["fix_suggestion"]
+    assert "未能定位" in diagnosis["report"]
 
 
 def test_unknown_domain_skips_investigation(client, home_id):
@@ -239,3 +280,77 @@ def test_unknown_domain_skips_investigation(client, home_id):
     assert result["candidate_hypotheses"] == []
     assert result["investigation_round"] == 0
     assert investigator.calls == []
+
+
+def test_filter_assertions_replaces_over_assertions():
+    """验收口径：LLM 输出带过度断言词，过滤为非断言表达。"""
+    text, replaced = _filter_assertions("一定是网关坏了，已修复。")
+
+    assert text == "可能是网关故障，建议检查。"
+    assert ("一定是", "可能是") in replaced
+    assert ("坏了", "故障") in replaced
+    assert ("已修复", "建议检查") in replaced
+
+
+def test_filter_assertions_keeps_clean_text():
+    text, replaced = _filter_assertions("可能是网关故障，建议检查。")
+
+    assert text == "可能是网关故障，建议检查。"
+    assert replaced == []
+
+
+def test_report_transwrites_and_filters_assertions(client, home_id):
+    """LLM 转写命中过滤表：文本进 trace 前被确定性净化。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
+        report=DiagnosisReport(
+            report="一定是停电了，已修复。", primary_cause_key="power_outage"
+        ),
+    )
+    investigator = _scripted_investigator({"device_status": ["light_offline"]})
+
+    result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+
+    diagnosis = result["final_diagnosis"]
+    assert diagnosis["status"] == "concluded"
+    assert diagnosis["report"] == "可能是停电了，建议检查。"
+    # 报告文本追加为 AI 消息，挂进主图后由 to_answer 提取返回。
+    assert result["messages"][-1].content == "可能是停电了，建议检查。"
+    # 报告 prompt 携带结构化结论 JSON。
+    assert "power_outage" in str(model.report_prompts[0])
+
+
+def test_report_guard_rejects_foreign_conclusion(client, home_id):
+    """LLM 复述的结论 key 与输入不一致：判定越权，丢弃转写回退模板。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
+        report=DiagnosisReport(
+            report="我判断是外星人干的。", primary_cause_key="alien_attack"
+        ),
+    )
+    investigator = _scripted_investigator({"device_status": ["light_offline"]})
+
+    result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+
+    report = result["final_diagnosis"]["report"]
+    assert "外星人" not in report
+    # 模板使用确定性主结论，不引入 LLM 新增内容。
+    assert "区域停电" in report
+
+
+def test_report_falls_back_when_llm_returns_none(client, home_id):
+    """LLM 未返回结构化报告：与解析失败同层回退规则模板。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
+        report=None,
+    )
+    investigator = _scripted_investigator({"device_status": ["light_offline"]})
+
+    result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+
+    report = result["final_diagnosis"]["report"]
+    assert "根据排查" in report
+    assert "区域停电" in report
