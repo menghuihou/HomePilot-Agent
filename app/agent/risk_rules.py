@@ -30,6 +30,13 @@ RISK_RULES: tuple[RiskRule, ...] = (
     RiskRule(action="restart_device", level="medium", require_approval=False),
     RiskRule(action="turn_light_on", level="low", require_approval=False),
     RiskRule(action="turn_light_off", level="low", require_approval=False),
+    # 灯光域知识库 fix_action（第 8 步对齐）：查询/清洁/人工联系类均为低风险。
+    RiskRule(action="check_power", level="low", require_approval=False),
+    RiskRule(action="replace_bulb", level="low", require_approval=False),
+    RiskRule(action="tighten_socket", level="low", require_approval=False),
+    RiskRule(action="toggle_switch", level="low", require_approval=False),
+    RiskRule(action="clean_shade", level="low", require_approval=False),
+    RiskRule(action="contact_electrician", level="low", require_approval=False),
 )
 
 # 由规则表构建的查表索引，O(1) 命中；运行期不再变更。

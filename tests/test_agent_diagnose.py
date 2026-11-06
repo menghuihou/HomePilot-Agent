@@ -6,8 +6,11 @@ LLM 用桩模型，数据库走真实本地库验证 symptom_key 反查。
 import asyncio
 import uuid
 
+import psycopg
 import pytest
 from langchain_core.messages import HumanMessage
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Command
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.agent.diagnose as diagnose_module
@@ -76,27 +79,63 @@ def _create_device(client, home_id: int, name: str, device_type: str) -> int:
     return resp.json()["id"]
 
 
-def _run_extract(home_id: int, text: str, model, investigator=None):
-    """独立引擎运行诊断子图；结束后同循环销毁，避免连接池跨事件循环复用。"""
+def _run_extract(
+    home_id: int,
+    text: str,
+    model,
+    investigator=None,
+    resume: str | None = None,
+    executor=None,
+):
+    """独立引擎运行诊断子图；结束后同循环销毁，避免连接池跨事件循环复用。
+
+    resume 非空（审批挂起场景）时同循环内用 Command 恢复并返回最终状态；
+    审批记录写入开发库，测试结束按 thread_id 清理。
+    """
     engine = create_async_engine(get_settings().database_url)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
-    graph = build_diagnose_graph(chat_model=model, investigator=investigator)
+    graph = build_diagnose_graph(
+        chat_model=model,
+        investigator=investigator or _scripted_investigator({}),
+        executor=executor,
+        checkpointer=MemorySaver(),
+    )
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
+    thread_id = f"dx-{uuid.uuid4().hex[:8]}"
     try:
 
         async def _run():
             try:
-                return await graph.ainvoke(
+                config = {"configurable": {"thread_id": thread_id}}
+                result = await graph.ainvoke(
                     {"messages": [HumanMessage(content=text)], "home_id": home_id},
-                    config={"configurable": {"thread_id": f"dx-{uuid.uuid4()}"}},
+                    config=config,
                 )
+                if resume is not None:
+                    result = await graph.ainvoke(
+                        Command(resume={"decision": resume, "reason": ""}),
+                        config=config,
+                    )
+                return result
             finally:
                 await engine.dispose()
 
-        return asyncio.run(_run())
+        result = asyncio.run(_run())
+        return result
     finally:
         monkeypatch.undo()
+        _cleanup_approvals(thread_id)
+
+
+def _cleanup_approvals(thread_id: str) -> None:
+    """清理本测试产生的审批审计行，保持开发库干净。"""
+    conninfo = get_settings().database_url_sync.replace(
+        "postgresql+psycopg://", "postgresql://", 1
+    )
+    with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM approvals WHERE thread_id = %s", (thread_id,))
+        conn.commit()
 
 
 def _scripted_investigator(script: dict[str, list[str]]):
@@ -109,6 +148,16 @@ def _scripted_investigator(script: dict[str, list[str]]):
 
     _investigate.calls = calls
     return _investigate
+
+
+def _stub_executor(calls: list[str]):
+    """记录执行动作并返回固定结果的执行器桩。"""
+
+    async def _executor(action: str, diagnosis: dict) -> str:
+        calls.append(action)
+        return "模拟执行成功"
+
+    return _executor
 
 
 def test_extract_resolves_valid_slots(client, home_id):
@@ -210,7 +259,6 @@ def test_investigation_converges_in_one_round(client, home_id):
     investigator = _scripted_investigator(
         {"device_status": ["light_offline"], "device_events": [], "gateway_status": []}
     )
-
     result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
 
     assert result["investigation_round"] == 1
@@ -224,6 +272,8 @@ def test_investigation_converges_in_one_round(client, home_id):
     assert diagnosis["status"] == "concluded"
     assert diagnosis["primary_cause_key"] == "power_outage"
     assert diagnosis["report"]
+    # check_power 已入规则表为 low → 自动放行，不挂起审批。
+    assert diagnosis["approval"]["decision"] == "auto"
 
 
 def test_investigation_shrinks_leader_to_two_in_two_rounds(client, home_id):
@@ -236,7 +286,21 @@ def test_investigation_shrinks_leader_to_two_in_two_rounds(client, home_id):
         {"device_status": ["light_buzz"], "device_events": ["light_overheat"]}
     )
 
-    result = _run_extract(home_id, "客厅灯不太对劲", model, investigator)
+    executor_calls: list[str] = []
+
+    async def _executor(action: str, diagnosis: dict) -> str:
+        executor_calls.append(action)
+        return "模拟执行成功"
+
+    # reduce_load 不在规则表 → high 兜底 → 挂起审批，恢复后执行。
+    result = _run_extract(
+        home_id,
+        "客厅灯不太对劲",
+        model,
+        investigator,
+        resume="approved",
+        executor=_executor,
+    )
 
     assert result["investigation_round"] == 2
     assert result["observed_evidence"] == ["light_buzz", "light_overheat"]
@@ -247,6 +311,8 @@ def test_investigation_shrinks_leader_to_two_in_two_rounds(client, home_id):
     )
     assert investigator.calls == ["device_status", "device_events"]
     assert result["final_diagnosis"]["status"] == "concluded"
+    assert result["final_diagnosis"]["approval"]["decision"] == "approved"
+    assert executor_calls == ["reduce_load"]
 
 
 def test_investigation_hard_cap_forces_conclusion(client, home_id):
@@ -310,13 +376,23 @@ def test_report_transwrites_and_filters_assertions(client, home_id):
     )
     investigator = _scripted_investigator({"device_status": ["light_offline"]})
 
-    result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+    executor_calls: list[str] = []
+    result = _run_extract(
+        home_id,
+        "客厅灯不亮了",
+        model,
+        investigator,
+        resume="approved",
+        executor=_stub_executor(executor_calls),
+    )
 
     diagnosis = result["final_diagnosis"]
     assert diagnosis["status"] == "concluded"
+    # check_power 为低风险 → auto 放行，报告不追加执行说明。
     assert diagnosis["report"] == "可能是停电了，建议检查。"
     # 报告文本追加为 AI 消息，挂进主图后由 to_answer 提取返回。
-    assert result["messages"][-1].content == "可能是停电了，建议检查。"
+    assert result["messages"][-1].content == diagnosis["report"]
+    assert executor_calls == []
     # 报告 prompt 携带结构化结论 JSON。
     assert "power_outage" in str(model.report_prompts[0])
 
@@ -332,7 +408,14 @@ def test_report_guard_rejects_foreign_conclusion(client, home_id):
     )
     investigator = _scripted_investigator({"device_status": ["light_offline"]})
 
-    result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+    result = _run_extract(
+        home_id,
+        "客厅灯不亮了",
+        model,
+        investigator,
+        resume="approved",
+        executor=_stub_executor([]),
+    )
 
     report = result["final_diagnosis"]["report"]
     assert "外星人" not in report
@@ -349,7 +432,14 @@ def test_report_falls_back_when_llm_returns_none(client, home_id):
     )
     investigator = _scripted_investigator({"device_status": ["light_offline"]})
 
-    result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+    result = _run_extract(
+        home_id,
+        "客厅灯不亮了",
+        model,
+        investigator,
+        resume="approved",
+        executor=_stub_executor([]),
+    )
 
     report = result["final_diagnosis"]["report"]
     assert "根据排查" in report

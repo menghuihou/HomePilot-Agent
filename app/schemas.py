@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -78,6 +79,22 @@ class DeviceRead(DeviceCreate):
 class DeviceEventCreate(BaseModel):
     event_type: str = Field(max_length=30)
     payload: dict | None = None
+
+
+class ApprovalDecisionRequest(BaseModel):
+    """审批决策请求：approved 放行执行，rejected 拒绝执行。"""
+
+    decision: Literal["approved", "rejected"]
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ApprovalDecisionResponse(BaseModel):
+    """审批决策响应：恢复后的最终状态摘要。"""
+
+    thread_id: str
+    decision: str
+    status: str
+    report: str | None = None
 
 
 class DeviceEventRead(DeviceEventCreate):

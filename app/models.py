@@ -6,6 +6,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -270,3 +271,33 @@ class SymptomCause(Base):
 
     symptom: Mapped[FaultSymptom] = relationship(back_populates="mappings")
     cause: Mapped[FaultCause] = relationship(back_populates="mappings")
+
+
+class Approval(Base):
+    """审批记录：高风险操作的挂起、决策与执行轨迹（审计基础数据）。
+
+    decision 取值：None（pending，挂起待决策）/ auto（低中风险自动放行）/
+    approved / rejected / blocked（范围校验不通过，禁止执行）。
+    同一会话同时最多一条 pending，由 partial unique index 兜底。
+    """
+
+    __tablename__ = "approvals"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # LangGraph checkpointer 的 thread_id（即聊天会话标识），恢复审批的主键。
+    thread_id: Mapped[str] = mapped_column(String(100))
+    home_id: Mapped[int] = mapped_column(BigInteger)
+    action: Mapped[str] = mapped_column(String(50))
+    target_device_id: Mapped[int | None] = mapped_column(BigInteger)
+    risk_level: Mapped[str] = mapped_column(String(10))
+    decision: Mapped[str | None] = mapped_column(String(20))
+    reason: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    synthetic: Mapped[bool] = mapped_column(default=True)
+    source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

@@ -1,7 +1,7 @@
-"""诊断子图：症状抽取 → 候选假设 → 分层排查（3 轮硬上限）→ 结论 → 审批。
+"""诊断子图：症状抽取 → 候选假设 → 分层排查 → 结论 → 审批门控 → 报告。
 
-已交付：DiagnoseState、症状抽取节点、候选假设计算与分层排查循环。
-后续步骤在同一骨架上插入诊断结论、审批门控与报告转写节点。
+已交付：DiagnoseState、症状抽取、候选假设、分层排查（3 轮硬上限）、
+确定性结论、报告转写与措辞过滤、审批门控（interrupt/Command）。
 
 序列化约束：DiagnoseState 全部字段为 JSON 原生类型，集合语义用
 list 表达，Pydantic 对象 model_dump 后再入状态，保证 Postgres
@@ -17,10 +17,12 @@ from typing import Annotated, TypedDict
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langfuse import get_client, observe
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.types import interrupt
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.agent.hypotheses import (
     build_final_diagnosis,
@@ -29,11 +31,19 @@ from app.agent.hypotheses import (
     should_conclude,
     shrink,
 )
+from app.agent.risk_rules import judge_risk
 from app.agent.state import last_human_message
 from app.database import session_factory
 from app.llm_client import build_chat_model, default_model_name
 from app.mcp.client import get_light_tools
-from app.models import Device, DeviceEvent, FaultCause, FaultSymptom, SymptomCause
+from app.models import (
+    Approval,
+    Device,
+    DeviceEvent,
+    FaultCause,
+    FaultSymptom,
+    SymptomCause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -189,9 +199,14 @@ async def _query_mcp_device_status(domain: str, device_id: int) -> dict | None:
             return None
         # 模拟设备 id 与库内自增 id 的近似映射（light-{id}），演示数据已对齐。
         result = await tool.ainvoke({"device_id": f"light-{device_id}"})
-    except Exception, asyncio.CancelledError:
-        # CancelledError 非 Exception 子类：跨事件循环复用 MCP 客户端时
-        # anyio 会以取消形式报错，诊断链路不能被 MCP 故障打断。
+    except asyncio.CancelledError as exc:
+        # 拆成两个子句：避免依赖 PEP 758 的无括号多异常语法（3.14 专属，
+        # 且与 ruff format 的规范化行为冲突）。CancelledError 非 Exception
+        # 子类：跨事件循环复用 MCP 客户端时 anyio 会以取消形式报错，
+        # 诊断链路不能被 MCP 故障打断。
+        logger.warning("MCP 设备状态查询失败，本轮不产出证据", exc_info=exc)
+        return None
+    except Exception:
         logger.warning("MCP 设备状态查询失败，本轮不产出证据", exc_info=True)
         return None
     return result if isinstance(result, dict) else None
@@ -240,6 +255,108 @@ async def default_investigator(layer: str, symptom: dict, home_id: int) -> list[
     # gateway_status 层：MCP 尚无网关状态查询工具（第 6 周域扩展补齐），
     # 网关假设当前靠 prevalence 排序进入结论候选。
     return []
+
+
+async def _ensure_pending_approval(
+    thread_id: str,
+    home_id: int,
+    decision_info,
+    target_device_id: int | None,
+) -> int:
+    """确保该会话存在 pending 审批记录；恢复时节点重跑直接复用同一行。
+
+    已知并发限制：同会话并发首次进入时，后到的 insert 会违反 pending
+    唯一索引（不变量仍由数据库兜底）；MVP 单用户下不处理该竞态。
+    """
+    async with session_factory() as session:
+        existing = (
+            (
+                await session.execute(
+                    select(Approval).where(
+                        Approval.thread_id == thread_id,
+                        Approval.decision.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if existing is not None:
+            return existing.id
+        approval = Approval(
+            thread_id=thread_id,
+            home_id=home_id,
+            action=decision_info.action,
+            target_device_id=target_device_id,
+            risk_level=decision_info.risk_level,
+            decision=None,
+        )
+        session.add(approval)
+        await session.commit()
+        return approval.id
+
+
+async def _record_approval_decision(
+    approval_id: int, decision: str, reason: str | None
+) -> None:
+    """决策后更新审批行；approvals 是审计基础数据，只更新不删除。"""
+    async with session_factory() as session:
+        approval = await session.get(Approval, approval_id)
+        if approval is None:
+            logger.warning("审批记录不存在：%s", approval_id)
+            return
+        approval.decision = decision
+        approval.reason = reason
+        approval.decided_at = func.now()
+        await session.commit()
+
+
+async def _record_auto_approval(
+    thread_id: str,
+    home_id: int,
+    decision_info,
+    target_device_id: int | None,
+    decision: str,
+) -> None:
+    """低中风险自动放行与范围阻断的审计落库（decision=auto/blocked）。"""
+    async with session_factory() as session:
+        approval = Approval(
+            thread_id=thread_id,
+            home_id=home_id,
+            action=decision_info.action,
+            target_device_id=target_device_id,
+            risk_level=decision_info.risk_level,
+            decision=decision,
+            reason=decision_info.reason,
+            decided_at=func.now(),
+        )
+        session.add(approval)
+        await session.commit()
+
+
+async def default_executor(action: str, diagnosis: dict) -> str:
+    """MVP 执行器：仅网关重启接入 MCP 工具；其余动作如实提示需人工。
+
+    执行失败不冒充成功——如实返回失败说明，由报告转述给用户。
+    gateway-1 为模拟映射近似值；多网关家庭需改为按 target 解析真实网关 id，
+    并对工具返回的 dict 结果做格式化后再进报告。
+    """
+    if action != "restart_gateway":
+        return f"动作 {action} 暂无自动执行器，建议已记录，请人工处理"
+    try:
+        tools = {tool.name: tool for tool in await get_light_tools()}
+        tool = tools.get("restart_gateway")
+        if tool is None:
+            return "执行失败：重启网关工具不可用，请人工处理"
+        result = await tool.ainvoke({"gateway_id": "gateway-1"})
+    except asyncio.CancelledError as exc:
+        # 拆分理由同 _query_mcp_device_status：不依赖 3.14 专属语法。
+        logger.warning("网关重启执行失败", exc_info=exc)
+        return "执行失败：网关重启工具暂不可用，请人工处理"
+    except Exception:
+        logger.warning("网关重启执行失败", exc_info=True)
+        return "执行失败：网关重启工具暂不可用，请人工处理"
+    return f"网关重启完成：{result}"
 
 
 def _filter_assertions(text: str) -> tuple[str, list[tuple[str, str]]]:
@@ -349,14 +466,21 @@ def _resolve_symptom(
     }
 
 
-def build_diagnose_graph(chat_model=None, investigator=None):
-    """构建诊断子图；chat_model / investigator 供测试注入桩实现。
+def build_diagnose_graph(
+    chat_model=None,
+    investigator=None,
+    executor=None,
+    checkpointer=None,
+):
+    """构建诊断子图；chat_model / investigator / executor 供测试注入桩实现。
 
-    investigator 签名 (layer, symptom, home_id) -> list[str]。
-    子图不自带 checkpointer：作为节点挂进主图时直接继承主图的
-    Postgres checkpointer，避免 checkpoint namespace 双层持久化。
+    investigator 签名 (layer, symptom, home_id) -> list[str]；
+    executor 签名 (action, diagnosis) -> str（审批通过后的执行器）。
+    checkpointer=None 时子图作为节点挂进主图直接继承主图持久化；
+    独立运行（含 interrupt 恢复测试）需显式传入 checkpointer。
     """
     investigator = investigator or default_investigator
+    executor = executor or default_executor
 
     async def extract_symptom(state: DiagnoseState, config: RunnableConfig) -> dict:
         """抽取症状槽位并用知识库验证；失败统一落回通用兜底症状。"""
@@ -465,9 +589,105 @@ def build_diagnose_graph(chat_model=None, investigator=None):
         )
         return {"final_diagnosis": diagnosis}
 
-    async def _report(state: DiagnoseState, config) -> dict:
-        """LLM 转写诊断报告；失败或越权结论一律回退规则模板并过滤措辞。"""
+    async def _approval_gate(state: DiagnoseState, config) -> dict:
+        """确定性审批门控：无动作放行；越界阻断；高风险 interrupt 等审批。
+
+        interrupt 挂起后进程可重启（checkpointer 持久化），恢复时节点重跑：
+        judge_risk 确定性重判 + pending 记录复用，保证幂等。
+        """
         diagnosis = dict(state.get("final_diagnosis") or {})
+        symptom = state.get("symptom") or {}
+        scope = state.get("scope") or {}
+        # home_id 是审批审计的必填字段：缺失属于装配错误，直接失败快停。
+        home_id = state["home_id"]
+        action = diagnosis.get("fix_action")
+        thread_id = (config or {}).get("configurable", {}).get("thread_id", "")
+        target_device_id = symptom.get("device_id")
+
+        if action is None:
+            # 无可执行动作（未定位/纯建议）：不产生审批记录，直接放行报告。
+            diagnosis["risk_level"] = "low"
+            diagnosis["approval"] = {
+                "action": None,
+                "risk_level": "low",
+                "decision": "auto",
+                "reason": "无可执行动作，跳过审批门控",
+            }
+            return {"final_diagnosis": diagnosis, "risk_level": "low"}
+
+        decision_info = judge_risk(action, target_device_id, scope)
+        diagnosis["risk_level"] = decision_info.risk_level
+
+        if not decision_info.allowed:
+            # 范围越界：禁止执行（与审批是两回事），审计落库后直接放行报告。
+            decision = "blocked"
+            execution_result = "操作超出授权范围，禁止自动执行"
+            await _record_auto_approval(
+                thread_id,
+                home_id,
+                decision_info,
+                target_device_id,
+                decision,
+            )
+        elif decision_info.require_approval:
+            approval_id = await _ensure_pending_approval(
+                thread_id, home_id, decision_info, target_device_id
+            )
+            resume_payload = interrupt(
+                {
+                    "type": "approval_required",
+                    "thread_id": thread_id,
+                    "approval_id": approval_id,
+                    "action": action,
+                    "risk_level": decision_info.risk_level,
+                    "reason": decision_info.reason,
+                    "suggestion": diagnosis.get("fix_suggestion"),
+                }
+            )
+            decision = resume_payload.get("decision")
+            await _record_approval_decision(
+                approval_id, decision, resume_payload.get("reason")
+            )
+            if decision == "approved":
+                execution_result = await executor(action, diagnosis)
+            else:
+                execution_result = "未执行"
+        else:
+            decision = "auto"
+            execution_result = None
+            await _record_auto_approval(
+                thread_id,
+                home_id,
+                decision_info,
+                target_device_id,
+                decision,
+            )
+
+        diagnosis["approval"] = {
+            "action": action,
+            "risk_level": decision_info.risk_level,
+            "require_approval": decision_info.require_approval,
+            "allowed": decision_info.allowed,
+            "decision": decision,
+            "reason": decision_info.reason,
+        }
+        diagnosis["execution_result"] = execution_result
+        return {"final_diagnosis": diagnosis, "risk_level": decision_info.risk_level}
+
+    async def _report(state: DiagnoseState, config) -> dict:
+        """LLM 转写诊断报告；失败或越权结论一律回退规则模板并过滤措辞。
+
+        审批决策改写报告：rejected 固定话术；approved 追加执行结果；
+        blocked 追加越界说明。
+        """
+        diagnosis = dict(state.get("final_diagnosis") or {})
+        approval = diagnosis.get("approval") or {}
+        decision = approval.get("decision", "auto")
+        if decision == "rejected":
+            # 计划口径：拒绝 → 报告改写为固定话术，不再转写。
+            text = "已记录，未执行，建议人工处理。"
+            diagnosis["report"] = text
+            return {"final_diagnosis": diagnosis, "messages": [AIMessage(content=text)]}
         payload = json.dumps(diagnosis, ensure_ascii=False)
         try:
             model = chat_model or build_chat_model()
@@ -496,6 +716,10 @@ def build_diagnose_graph(chat_model=None, investigator=None):
             if report is not None
             else _apply_wording_filter(_rule_template_report(diagnosis))
         )
+        if decision == "approved":
+            text = f"{text}\n操作已执行：{diagnosis.get('execution_result', '')}"
+        elif decision == "blocked":
+            text = f"{text}\n该操作超出授权范围，未自动执行，建议人工处理。"
         diagnosis["report"] = text
         # 报告追加 AI 消息：挂进主图后由 to_answer 取正文返回。
         return {"final_diagnosis": diagnosis, "messages": [AIMessage(content=text)]}
@@ -505,6 +729,7 @@ def build_diagnose_graph(chat_model=None, investigator=None):
     builder.add_node("compute_hypotheses", _compute_candidates)
     builder.add_node("investigate", _investigate_round)
     builder.add_node("conclude", _conclude)
+    builder.add_node("approval_gate", _approval_gate)
     builder.add_node("report", _report)
     builder.add_edge(START, "extract_symptom")
     builder.add_edge("extract_symptom", "compute_hypotheses")
@@ -514,6 +739,26 @@ def build_diagnose_graph(chat_model=None, investigator=None):
     builder.add_conditional_edges(
         "investigate", _after_investigate, ["investigate", "conclude"]
     )
-    builder.add_edge("conclude", "report")
+    builder.add_edge("conclude", "approval_gate")
+    builder.add_edge("approval_gate", "report")
     builder.add_edge("report", END)
-    return builder.compile()
+    return builder.compile(checkpointer=checkpointer)
+
+
+# 审批决策接口（第 8 步）续跑用单例：MemorySaver 进程内有效；
+# 第 9 步替换为 Postgres checkpointer 后实现跨进程断点续跑。
+_diagnose_graph_singleton = None
+
+
+def get_diagnose_graph():
+    """审批恢复与诊断图挂载的唯一图提供者（同实例同 checkpointer）。
+
+    架构不变量：第 10 步把本子图挂进 chat 主图时必须复用本实例，
+    不得另建——interrupt 状态存在发起诊断的那份 checkpointer 里，
+    恢复接口换实例会导致查不到 thread、审批死锁。第 9 步把
+    MemorySaver 换成 PostgresSaver 时也只改这里。
+    """
+    global _diagnose_graph_singleton
+    if _diagnose_graph_singleton is None:
+        _diagnose_graph_singleton = build_diagnose_graph(checkpointer=MemorySaver())
+    return _diagnose_graph_singleton
