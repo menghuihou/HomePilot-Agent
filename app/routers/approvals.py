@@ -47,7 +47,7 @@ async def decide_approval(
             detail="no pending approval for thread",
         )
 
-    graph = get_diagnose_graph()
+    graph = await get_diagnose_graph()
     config = {"configurable": {"thread_id": thread_id}}
     result = await graph.ainvoke(Command(resume=body.model_dump()), config=config)
     diagnosis = result.get("final_diagnosis") or {}

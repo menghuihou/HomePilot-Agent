@@ -251,8 +251,12 @@ def test_decision_endpoint_resumes_approved(client, home_id):
     graph, monkeypatch, engine, session_maker = _build_graph(
         model, investigator, _stub_executor(executor_calls)
     )
-    monkeypatch.setattr(approvals_router, "get_diagnose_graph", lambda: graph)
     monkeypatch.setattr(approvals_router, "session_factory", session_maker)
+
+    async def _fake_get_graph():
+        return graph
+
+    monkeypatch.setattr(approvals_router, "get_diagnose_graph", _fake_get_graph)
     thread_id = f"ap-{uuid.uuid4().hex[:8]}"
     try:
 

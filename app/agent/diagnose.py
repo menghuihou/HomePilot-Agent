@@ -17,7 +17,6 @@ from typing import Annotated, TypedDict
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langfuse import get_client, observe
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
@@ -33,6 +32,7 @@ from app.agent.hypotheses import (
 )
 from app.agent.risk_rules import judge_risk
 from app.agent.state import last_human_message
+from app.config import get_settings
 from app.database import session_factory
 from app.llm_client import build_chat_model, default_model_name
 from app.mcp.client import get_light_tools
@@ -745,20 +745,39 @@ def build_diagnose_graph(
     return builder.compile(checkpointer=checkpointer)
 
 
-# 审批决策接口（第 8 步）续跑用单例：MemorySaver 进程内有效；
-# 第 9 步替换为 Postgres checkpointer 后实现跨进程断点续跑。
+# 审批决策接口续跑用单例：checkpointer 为 AsyncPostgresSaver，
+# 审批挂起状态持久化在 PostgreSQL，进程重启后仍可恢复。
 _diagnose_graph_singleton = None
 
 
-def get_diagnose_graph():
+async def get_diagnose_graph():
     """审批恢复与诊断图挂载的唯一图提供者（同实例同 checkpointer）。
 
     架构不变量：第 10 步把本子图挂进 chat 主图时必须复用本实例，
     不得另建——interrupt 状态存在发起诊断的那份 checkpointer 里，
-    恢复接口换实例会导致查不到 thread、审批死锁。第 9 步把
-    MemorySaver 换成 PostgresSaver 时也只改这里。
+    恢复接口换实例会导致查不到 thread、审批死锁。
     """
     global _diagnose_graph_singleton
     if _diagnose_graph_singleton is None:
-        _diagnose_graph_singleton = build_diagnose_graph(checkpointer=MemorySaver())
+        # 延迟导入：CRUD 等非诊断路径无需加载 checkpointer 依赖。
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from psycopg_pool import AsyncConnectionPool
+
+        # 连接池跟随进程生命周期；v3.2.0 的 saver 不再接受裸连接串，
+        # setup 里的 CREATE INDEX CONCURRENTLY 要求连接 autocommit。
+        pool = AsyncConnectionPool(
+            _checkpoint_conninfo(), open=False, kwargs={"autocommit": True}
+        )
+        await pool.open()
+        saver = AsyncPostgresSaver(pool)
+        # LangGraph 内部表（checkpoints 等），setup 幂等，独立于 Alembic。
+        await saver.setup()
+        _diagnose_graph_singleton = build_diagnose_graph(checkpointer=saver)
     return _diagnose_graph_singleton
+
+
+def _checkpoint_conninfo() -> str:
+    """AsyncConnectionPool 需要 psycopg 原生 URI：去掉 SQLAlchemy 方言前缀。"""
+    return get_settings().database_url_sync.replace(
+        "postgresql+psycopg://", "postgresql://", 1
+    )

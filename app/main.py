@@ -1,7 +1,9 @@
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.agent.diagnose import get_diagnose_graph
 from app.config import get_settings
 from app.observability import setup_observability
 from app.routers import approvals, chat, devices, homes, llm, preferences
@@ -14,9 +16,21 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """诊断审批续跑依赖 LangGraph checkpointer 内部表：启动即建表（幂等）。
+
+    独立于 Alembic：这批表属于 LangGraph，不由项目迁移体系管理。
+    """
+    await get_diagnose_graph()
+    yield
+
+
 application = FastAPI(
     title="HomePilot Agent",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 setup_observability(application)

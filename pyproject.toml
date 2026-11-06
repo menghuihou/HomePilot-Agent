@@ -10,6 +10,7 @@ dependencies = [
     "langchain-anthropic>=1.7.6",
     "langfuse>=5.0.4",
     "langgraph==1.2.16",
+    "langgraph-checkpoint-postgres>=2.0.0",
     "opentelemetry-exporter-otlp-proto-http>=1.45.0,<2",
     "opentelemetry-instrumentation-fastapi>=0.66b1",
     "psycopg[binary]>=3.3.6",
