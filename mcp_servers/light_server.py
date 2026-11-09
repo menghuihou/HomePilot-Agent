@@ -1,97 +1,169 @@
-"""灯光域 MCP Server：4 个工具（灯光 3 + 网关演示 1），全部基于内存模拟数据。
+"""灯光域 MCP Server：4 个工具，数据源为业务库（devices / device_events）。
 
 独立进程运行（stdio 传输）：
 
     uv run python mcp_servers/light_server.py
 
-注意：stdio 模式下 stdout 是 JSON-RPC 协议通道，服务端代码禁止 print 到
-stdout，日志一律走 stderr，否则会破坏客户端的协议解析。
+数据口径：设备当前状态由「最新一条 device_event」推导（事件溯源 MVP）；
+turn_on / turn_off / restart_gateway 通过追加事件落库，天然留痕。
 
-风险等级标注说明：工具描述里的「风险等级」仅做展示参考，编排层的
-审批门控以 app/agent/risk_rules.py 的规则表为唯一依据。
+注意事项：
+- stdio 模式下 stdout 是 JSON-RPC 协议通道，服务端代码禁止 print 到
+  stdout，日志一律走 stderr，否则会破坏客户端的协议解析；
+- 进程内自建 AsyncEngine（连接跟随进程生命周期）；作为 pytest 内进程
+  复用时，跨事件循环复用前须先 dispose（见 test_mcp_light_server）；
+- 风险等级标注说明：工具描述里的「风险等级」仅做展示参考，编排层的
+  审批门控以 app/agent/risk_rules.py 的规则表为唯一依据。
 """
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from fastmcp import FastMCP
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
+from app.config import get_settings
+from app.models import Device, DeviceEvent
 
 mcp = FastMCP("home-light-server")
 
-# 模拟设备表：进程内存活，服务重启即恢复初始值。
-_LIGHTS: dict[str, dict] = {
-    "light-1": {"name": "客厅灯", "online": True, "brightness": 80},
-    "light-2": {"name": "卧室灯", "online": True, "brightness": 0},
-    "light-3": {"name": "阳台灯", "online": False, "brightness": 0},
-}
+# 独立进程自建引擎：NullPool 每次现连现断——MCP 工具调用稀疏，
+# 且规避 pytest 进程内多事件循环复用连接池的跨 loop 问题。
+_engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+_session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
-_AVAILABLE_IDS = ", ".join(_LIGHTS)
 
-# 模拟网关：网关重启是第 3 周审批演示主路径的高风险动作。
-_GATEWAY: dict = {"id": "gateway-1", "name": "家庭网关", "online": True, "restarts": 0}
+def _parse_device_id(device_id: str) -> int | None:
+    """把传入 id 解析为业务库自增主键；不合法返回 None。"""
+    try:
+        return int(device_id)
+    except TypeError, ValueError:
+        return None
+
+
+async def _load_device(device_id: int, *device_types: str) -> Device | None:
+    """按主键加载设备；指定类型时校验设备域，不匹配视同不存在。"""
+    async with _session_factory() as session:
+        device = await session.get(Device, device_id)
+    if device is None:
+        return None
+    if device_types and device.device_type not in device_types:
+        return None
+    return device
+
+
+async def _latest_event(device_id: int) -> DeviceEvent | None:
+    """加载设备最新一条事件（状态推导数据源）。"""
+    async with _session_factory() as session:
+        row = await session.execute(
+            select(DeviceEvent)
+            .where(DeviceEvent.device_id == device_id)
+            .order_by(DeviceEvent.occurred_at.desc(), DeviceEvent.id.desc())
+            .limit(1)
+        )
+        return row.scalars().first()
+
+
+async def _append_event(device_id: int, event_type: str, payload: dict) -> None:
+    """追加设备事件并提交（状态变更的唯一写入口径）。"""
+    async with _session_factory() as session:
+        session.add(
+            DeviceEvent(device_id=device_id, event_type=event_type, payload=payload)
+        )
+        await session.commit()
+
+
+def _status_from_event(event: DeviceEvent | None) -> dict:
+    """由最新事件推导当前状态；从未上报事件的设备视为离线。"""
+    if event is None or event.event_type == "power_off":
+        return {"online": False, "brightness": 0}
+    brightness = (event.payload or {}).get("brightness") or 100
+    return {"online": True, "brightness": brightness}
 
 
 @mcp.tool
-def get_device_status(device_id: str) -> dict:
+async def get_device_status(device_id: str) -> dict:
     """查询灯光设备的当前状态（在线、亮度）。
 
     风险等级：low。
 
     Args:
-        device_id: 设备 id，可用值：light-1 / light-2 / light-3。
+        device_id: 设备 id（业务库 devices.id），如 "17"。
     """
-    light = _LIGHTS.get(device_id)
-    if light is None:
-        return {"device_id": device_id, "error": f"设备不存在，可用：{_AVAILABLE_IDS}"}
-    return {"device_id": device_id, **light}
+    parsed = _parse_device_id(device_id)
+    if parsed is None:
+        return {"device_id": device_id, "error": f"设备 id 不合法：{device_id}"}
+    device = await _load_device(parsed, "light")
+    if device is None:
+        return {
+            "device_id": device_id,
+            "error": f"设备不存在或不是灯光设备：{device_id}",
+        }
+    status = _status_from_event(await _latest_event(parsed))
+    return {"device_id": device_id, "name": device.name, **status}
 
 
 @mcp.tool
-def turn_light_on(device_id: str) -> str:
+async def turn_light_on(device_id: str) -> str:
     """打开灯光设备；亮度为 0 时自动设为 80%。
 
     风险等级：low。
 
     Args:
-        device_id: 设备 id，可用值：light-1 / light-2 / light-3。
+        device_id: 设备 id（业务库 devices.id），如 "17"。
     """
-    light = _LIGHTS.get(device_id)
-    if light is None:
-        return f"错误：设备 {device_id} 不存在，可用：{_AVAILABLE_IDS}"
-    light["online"] = True
-    if light["brightness"] == 0:
-        light["brightness"] = 80
-    return f"已打开{light['name']}，当前亮度 {light['brightness']}%"
+    parsed = _parse_device_id(device_id)
+    if parsed is None:
+        return f"错误：设备 id 不合法：{device_id}"
+    device = await _load_device(parsed, "light")
+    if device is None:
+        return f"错误：设备 {device_id} 不存在或不是灯光设备"
+    brightness = _status_from_event(await _latest_event(parsed))["brightness"]
+    new_brightness = brightness or 80
+    await _append_event(parsed, "power_on", {"brightness": new_brightness})
+    return f"已打开{device.name}，当前亮度 {new_brightness}%"
 
 
 @mcp.tool
-def turn_light_off(device_id: str) -> str:
+async def turn_light_off(device_id: str) -> str:
     """关闭灯光设备，亮度归零。
 
     风险等级：low。
 
     Args:
-        device_id: 设备 id，可用值：light-1 / light-2 / light-3。
+        device_id: 设备 id（业务库 devices.id），如 "17"。
     """
-    light = _LIGHTS.get(device_id)
-    if light is None:
-        return f"错误：设备 {device_id} 不存在，可用：{_AVAILABLE_IDS}"
-    light["online"] = False
-    light["brightness"] = 0
-    return f"已关闭{light['name']}"
+    parsed = _parse_device_id(device_id)
+    if parsed is None:
+        return f"错误：设备 id 不合法：{device_id}"
+    device = await _load_device(parsed, "light")
+    if device is None:
+        return f"错误：设备 {device_id} 不存在或不是灯光设备"
+    await _append_event(parsed, "power_off", {"brightness": 0})
+    return f"已关闭{device.name}"
 
 
 @mcp.tool
-def restart_gateway(gateway_id: str) -> str:
+async def restart_gateway(gateway_id: str) -> str:
     """重启家庭网关，恢复全屋设备接入；高风险动作，须审批通过后调用。
 
     风险等级：high。
 
     Args:
-        gateway_id: 网关 id，可用值：gateway-1。
+        gateway_id: 网关设备 id（业务库 devices.id），如 "3"。
     """
-    if gateway_id != _GATEWAY["id"]:
-        return f"错误：网关 {gateway_id} 不存在，可用：{_GATEWAY['id']}"
-    _GATEWAY["online"] = True
-    _GATEWAY["restarts"] += 1
-    return f"{_GATEWAY['name']}重启成功，全屋设备已重新接入"
+    parsed = _parse_device_id(gateway_id)
+    if parsed is None:
+        return f"错误：网关 id 不合法：{gateway_id}"
+    device = await _load_device(parsed, "gateway")
+    if device is None:
+        return f"错误：网关 {gateway_id} 不存在"
+    await _append_event(parsed, "gateway_restart", {"online": True})
+    return f"{device.name}重启成功，全屋设备已重新接入"
 
 
 if __name__ == "__main__":

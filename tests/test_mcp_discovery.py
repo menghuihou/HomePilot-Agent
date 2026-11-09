@@ -12,6 +12,7 @@ from app.agent.chat import build_agent_graph
 from app.config import BASE_DIR, get_settings
 from app.mcp.client import McpToolClient
 from tests.test_agent_chat import StubChatModel, StubRouterModel
+from tests.test_agent_diagnose import _create_device
 
 
 def _make_client() -> McpToolClient:
@@ -76,14 +77,18 @@ def test_discovers_all_light_domain_tools():
     assert "风险等级：high" in gateway_tool.description
 
 
-def test_converted_tool_calls_server():
+def test_converted_tool_calls_server(client, home_id):
+    """MCP 转换工具按业务库 devices.id 查询真实设备。"""
+    device_id = _create_device(client, home_id, "阳台灯", "light")
     mcp_client = _make_client()
 
     async def _run():
         try:
             tools = {t.name: t for t in await mcp_client.ensure_started()}
-            result = await tools["turn_light_on"].ainvoke({"device_id": "light-3"})
-            status = await tools["get_device_status"].ainvoke({"device_id": "light-3"})
+            result = await tools["turn_light_on"].ainvoke({"device_id": str(device_id)})
+            status = await tools["get_device_status"].ainvoke(
+                {"device_id": str(device_id)}
+            )
             return result, status
         finally:
             await mcp_client.aclose()
@@ -97,6 +102,7 @@ def test_converted_tool_calls_server():
 
 def test_agent_calls_turn_light_on_through_mcp(client, home_id):
     """桩模型发起 turn_light_on 调用，经真实 MCP Server 返回文本。"""
+    device_id = _create_device(client, home_id, "阳台灯", "light")
     mcp_client = _make_client()
 
     async def provider():
@@ -111,7 +117,7 @@ def test_agent_calls_turn_light_on_through_mcp(client, home_id):
                     tool_calls=[
                         {
                             "name": "turn_light_on",
-                            "args": {"device_id": "light-3"},
+                            "args": {"device_id": str(device_id)},
                             "id": "call_1",
                         }
                     ],

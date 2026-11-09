@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -63,6 +64,39 @@ def test_chat_returns_answer_intent_and_thread_id(client, stub_graph, home_id):
     assert body["thread_id"]
     # trace_id 尽力而为：Langfuse 上下文可用时非空
     assert "trace_id" in body
+
+
+def test_chat_interrupt_returns_guidance_not_500(client, home_id):
+    """同步接口命中审批挂起：返回引导话术，而非 KeyError 500。"""
+
+    class InterruptStubGraph:
+        """复现审批挂起形态：to_answer 未跑，结果只有 __interrupt__。"""
+
+        async def ainvoke(self, state, config=None):
+            return {
+                "intent": "diagnose",
+                "__interrupt__": (
+                    SimpleNamespace(
+                        value={
+                            "action": "restart_gateway",
+                            "risk_level": "high",
+                        }
+                    ),
+                ),
+            }
+
+    application.dependency_overrides[chat_api.get_agent_graph] = lambda: (
+        InterruptStubGraph()
+    )
+    try:
+        resp = client.post("/chat", json={"home_id": home_id, "message": "把灯打开"})
+    finally:
+        application.dependency_overrides.pop(chat_api.get_agent_graph, None)
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["intent"] == "diagnose"
+    assert "流式对话" in body["answer"]
 
 
 def test_chat_echoes_existing_thread_id(client, stub_graph, home_id):

@@ -1,6 +1,7 @@
 """chat 子图：带偏好记录工具的多轮对话，以及 Agent 主图编排。
 
-主图流程：load_context -> route ->（chat 子图 | direct_reply）-> to_answer。
+主图流程：load_context -> route ->（chat 子图 | 诊断子图 | direct_reply）
+-> to_answer。
 """
 
 import logging
@@ -19,6 +20,7 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agent.context import HomeContext, resolve_home_context
+from app.agent.diagnose import build_checkpoint_pool, build_diagnose_graph
 from app.agent.router import classify_intent, reply_for_intent, summarize_home_context
 from app.agent.state import AgentState
 from app.database import session_factory
@@ -173,9 +175,21 @@ def build_chat_graph(
     return builder.compile(checkpointer=MemorySaver())
 
 
-def build_agent_graph(router_model=None, chat_model=None, extra_tools_provider=None):
-    """构建 Agent 主图；两个模型参数仅供测试注入桩。"""
+def build_agent_graph(
+    router_model=None,
+    chat_model=None,
+    extra_tools_provider=None,
+    diagnose_graph=None,
+    checkpointer=None,
+):
+    """构建 Agent 主图；模型与子图参数仅供测试注入桩实现。
+
+    diagnose_graph 缺省按项目默认构建且不带自有 checkpointer：
+    作为节点挂进主图后继承主图 checkpointer，审批 interrupt 由主图
+    统一持久化（第 9/10 步的跨进程续跑依赖这一点）。
+    """
     chat_graph = build_chat_graph(chat_model, extra_tools_provider)
+    diagnose_graph = diagnose_graph or build_diagnose_graph()
 
     async def load_context(state: AgentState) -> dict:
         async with session_factory() as session:
@@ -186,10 +200,20 @@ def build_agent_graph(router_model=None, chat_model=None, extra_tools_provider=N
         intent = await classify_intent(
             state["messages"], state["home_context"], chat_model=router_model
         )
+        _route_observation(intent, state["home_id"])
         return {"intent": intent}
 
+    @observe(name="agent-route")
+    def _route_observation(intent: str, home_id: int) -> dict:
+        """观测点：意图分发结果，供按意图筛选 trace。"""
+        return {"intent": intent, "home_id": home_id}
+
     def _dispatch(state: AgentState) -> str:
-        return "chat" if state["intent"] == "chat" else "direct_reply"
+        if state["intent"] == "chat":
+            return "chat"
+        if state["intent"] == "diagnose":
+            return "diagnose"
+        return "direct_reply"
 
     def to_answer(state: AgentState) -> dict:
         # chat 路径必然以模型最终回复结尾，取最后一条消息正文即可。
@@ -221,16 +245,44 @@ def build_agent_graph(router_model=None, chat_model=None, extra_tools_provider=N
     builder.add_node("route", route)
     # 编译后的子图直接作为节点：messages / home_context 走共享 channel。
     builder.add_node("chat", chat_graph)
+    builder.add_node("diagnose", diagnose_graph)
     builder.add_node("to_answer", to_answer)
     builder.add_node("direct_reply", direct_reply)
     builder.add_edge(START, "load_context")
     builder.add_edge("load_context", "route")
-    builder.add_conditional_edges("route", _dispatch, ["chat", "direct_reply"])
+    builder.add_conditional_edges(
+        "route", _dispatch, ["chat", "diagnose", "direct_reply"]
+    )
     builder.add_edge("chat", "to_answer")
+    builder.add_edge("diagnose", "to_answer")
     builder.add_edge("to_answer", END)
     builder.add_edge("direct_reply", END)
-    return builder.compile(checkpointer=MemorySaver())
+    # 缺省 MemorySaver 保持单测/本地行为不变；生产路径显式传
+    # AsyncPostgresSaver（见 get_agent_graph）实现审批跨进程续跑。
+    return builder.compile(checkpointer=checkpointer or MemorySaver())
 
 
-# 供接口层（第 7 步 chat 路由）直接导入使用。
-agent_graph = build_agent_graph(extra_tools_provider=get_light_tools)
+# chat 主图唯一提供者：诊断挂载与审批恢复必须共用本实例——
+# interrupt 状态存在发起诊断的 checkpointer 里，恢复接口换实例会
+# 查不到 thread 导致审批死锁（第 8 步审查确认的架构不变量）。
+_agent_graph_singleton = None
+
+
+async def get_agent_graph():
+    """惰性构建主图；checkpointer 为 AsyncPostgresSaver（审批跨进程续跑）。"""
+    global _agent_graph_singleton
+    if _agent_graph_singleton is None:
+        # 延迟导入：CRUD 等非 chat 路径无需加载 checkpointer 依赖。
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        pool = await build_checkpoint_pool()
+        saver = AsyncPostgresSaver(pool)
+        # LangGraph 内部表（checkpoints 等），setup 幂等，独立于 Alembic。
+        await saver.setup()
+        _agent_graph_singleton = build_agent_graph(
+            extra_tools_provider=get_light_tools,
+            # 诊断子图不带自有 checkpointer：继承主图 saver，审批状态同源。
+            diagnose_graph=build_diagnose_graph(),
+            checkpointer=saver,
+        )
+    return _agent_graph_singleton

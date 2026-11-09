@@ -26,6 +26,11 @@ _SYSTEM_PROMPT_TEMPLATE = """你是智能家庭助手的意图路由器，只负
 - inspect：巡检全屋设备状态或索要家庭日报
 - home_mode：询问家庭当前模式
 
+易混边界（按现象 vs 动作区分）：
+- 用户【报告故障现象】——不亮、离线、无反应、异响、漏水、状态异常——一律 diagnose，
+  即使用户在描述里提到「重启」「修复」等字眼；
+- 用户【要求执行一个具体动作】——开关、调温、重启某台设备——才是 control。
+
 只对【最后一条用户消息】进行分类；其余消息仅用于理解上下文
 （例如问题分多条发出、或指代前文），不要据此改变分类对象。
 
@@ -38,7 +43,6 @@ _CONTEXT_WINDOW = 6
 # 后续周次实现的意图先统一返回占位文案，避免提前实现子图。
 _UNSUPPORTED_PLACEHOLDERS = {
     "control": "设备控制能力将在后续版本上线。",
-    "diagnose": "故障诊断能力将在后续版本上线。",
     "inspect": "设备巡检能力将在后续版本上线。",
 }
 
@@ -130,22 +134,26 @@ async def classify_intent(
         home_summary=summarize_home_context(home_context)
     )
     try:
-        decision = await _invoke_router(
-            model,
-            [
-                SystemMessage(content=system_prompt),
-                *_merge_consecutive_humans(_dialog_window(messages)),
-            ],
-        )
+        prompt_messages = [
+            SystemMessage(content=system_prompt),
+            *_merge_consecutive_humans(_dialog_window(messages)),
+        ]
+        # None（模型未调用结构化输出工具，GLM 推理模型偶发）重试一次：
+        # 同 prompt 的非确定性失败重试即可恢复；调用异常（网关/超时）
+        # 不重试，快速降级避免双倍延迟。
+        decision = None
+        for attempt in (1, 2):
+            decision = await _invoke_router(model, prompt_messages)
+            if decision is not None:
+                break
+            logger.warning("意图路由未返回结构化结果（第 %s 次）", attempt)
     except Exception:
         # 兜底边界：结构化解析失败、网关超时等多种异常类型都不应中断对话，
         # 统一降级为闲聊意图；本地日志兜底 Langfuse 不可用或未配置的场景。
         logger.warning("意图路由失败，已降级为 chat", exc_info=True)
         return "chat"
     if decision is None:
-        # 网关/模型未调用结构化输出工具时 with_structured_output 返回 None
-        # （而非抛异常），与解析失败同层兜底，避免 NoneType 崩溃。
-        logger.warning("意图路由未返回结构化结果，已降级为 chat")
+        logger.warning("意图路由两次均未返回结构化结果，已降级为 chat")
         return "chat"
     return decision.intent
 

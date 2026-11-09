@@ -150,6 +150,38 @@ def test_router_none_output_falls_back_to_chat():
     assert intent == "chat"
 
 
+def test_router_none_output_retries_once_before_fallback():
+    """首次 None（GLM 偶发不调结构化工具）重试一次：重试命中则正常路由。"""
+
+    class FlakyThenOkRouterModel:
+        """第一次返回 None，第二次返回固定决策。"""
+
+        def __init__(self, decision: RouterDecision):
+            self._decision = decision
+            self.calls = 0
+
+        def with_structured_output(self, schema):
+            stub = self
+
+            class _Structured:
+                async def ainvoke(self, messages):
+                    stub.calls += 1
+                    return stub._decision if stub.calls >= 2 else None
+
+            return _Structured()
+
+    model = FlakyThenOkRouterModel(RouterDecision(intent="diagnose"))
+
+    intent = asyncio.run(
+        classify_intent(
+            [HumanMessage(content="客厅灯不亮了")], _make_context(), chat_model=model
+        )
+    )
+
+    assert intent == "diagnose"
+    assert model.calls == 2
+
+
 def test_router_merges_consecutive_humans_in_window():
     """窗口末尾连续 human 消息合并为一条，消除 GLM 不调工具的触发形态。"""
     model = StubChatModel(RouterDecision(intent="chat"))
@@ -199,7 +231,7 @@ def test_reply_for_home_mode_reads_current_mode():
     assert reply == "当前家庭模式是：sleep。"
 
 
-@pytest.mark.parametrize("intent", ["control", "diagnose", "inspect"])
+@pytest.mark.parametrize("intent", ["control", "inspect"])
 def test_reply_for_unsupported_intents_are_placeholders(intent):
     reply = reply_for_intent(intent, _make_context())
 

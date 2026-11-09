@@ -19,7 +19,7 @@ from opentelemetry.trace import format_trace_id, get_current_span
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.chat import agent_graph
+from app.agent.chat import get_agent_graph as build_dependency_graph
 from app.database import get_session
 from app.models import Home
 
@@ -52,9 +52,13 @@ class ChatResponse(BaseModel):
     trace_id: str = ""
 
 
-def get_agent_graph() -> Any:
-    """依赖注入出口：测试用 dependency_overrides 替换为桩图。"""
-    return agent_graph
+async def get_agent_graph() -> Any:
+    """依赖注入出口：测试用 dependency_overrides 替换为桩图。
+
+    生产路径走 chat 模块的异步单例（Postgres checkpointer）；
+    审批挂起与决策恢复共用同一实例（同实例同 checkpointer 不变量）。
+    """
+    return await build_dependency_graph()
 
 
 def _current_trace_id() -> str:
@@ -108,8 +112,13 @@ async def chat(
         },
         config={"configurable": {"thread_id": thread_id}},
     )
+    if result.get("__interrupt__"):
+        # 同步接口无法完成审批交互：明确指引用户走流式接口。
+        answer = "该请求包含需要审批确认的高风险操作，请改用流式对话完成审批流程。"
+    else:
+        answer = result["answer"]
     return ChatResponse(
-        answer=result["answer"],
+        answer=answer,
         intent=result["intent"],
         thread_id=thread_id,
         trace_id=_current_trace_id(),
@@ -176,11 +185,34 @@ async def chat_stream(
             return
         # 直接读最终状态：chat 与 direct_reply 两条路径都覆盖，
         # 只靠 delta/to_answer 事件会漏掉非 chat 路径的答案。
+        state = None
         try:
-            state = graph.get_state(config)
+            # 主图 checkpointer 为 AsyncPostgresSaver：必须用异步 aget_state，
+            # 同步 get_state 会抛错被吞掉，导致审批事件丢失 + 空气泡。
+            state = await graph.aget_state(config)
             final_answer = (state.values or {}).get("answer", "") or final_answer
         except Exception:  # noqa: BLE001
             final_answer = final_answer or "".join(chunks)
+        # 审批挂起：图在 approval_gate 停下等用户决策，下发审批事件供
+        # 前端渲染审批卡片（决策走 /approvals/{thread_id}/decision）。
+        if state is not None and state.next:
+            for task in state.tasks or ():
+                fired = False
+                for graph_interrupt in getattr(task, "interrupts", ()) or ():
+                    fired = True
+                    interrupt_payload = graph_interrupt.value or {}
+                    yield _sse(
+                        "approval_required",
+                        {
+                            "thread_id": thread_id,
+                            "action": interrupt_payload.get("action"),
+                            "risk_level": interrupt_payload.get("risk_level"),
+                            "reason": interrupt_payload.get("reason", ""),
+                            "suggestion": interrupt_payload.get("suggestion", ""),
+                        },
+                    )
+                if fired:
+                    break
         yield _sse(
             "done",
             {"answer": final_answer or "".join(chunks), "trace_id": trace_id},

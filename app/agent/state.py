@@ -27,3 +27,6 @@ class AgentState(TypedDict):
     intent: str
     # 面向用户的最终回复。
     answer: str
+    # 诊断子图产出（第 10 步）：审批风险等级与最终诊断结论。
+    risk_level: str
+    final_diagnosis: dict | None

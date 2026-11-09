@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, status
 from langgraph.types import Command
 from sqlalchemy import select
 
-from app.agent.diagnose import get_diagnose_graph
+from app.agent.chat import get_agent_graph
 from app.database import session_factory
 from app.models import Approval
 from app.schemas import ApprovalDecisionRequest, ApprovalDecisionResponse
@@ -41,13 +41,39 @@ async def decide_approval(
             .scalars()
             .first()
         )
+        latest = (
+            (
+                await session.execute(
+                    select(Approval)
+                    .where(Approval.thread_id == thread_id)
+                    .order_by(Approval.created_at.desc())
+                    .limit(1)
+                )
+            )
+            .scalars()
+            .first()
+        )
     if pending is None:
+        if latest is not None and latest.decision is not None:
+            # 幂等：同一审批重复提交（双击/刷新）返回已处理状态，
+            # 而不是 404 让前端弹失败提示。
+            logger.info(
+                "审批重复提交：thread=%s 已处理（%s）", thread_id, latest.decision
+            )
+            return ApprovalDecisionResponse(
+                thread_id=thread_id,
+                decision=latest.decision,
+                status="already_processed",
+                report=None,
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="no pending approval for thread",
         )
 
-    graph = await get_diagnose_graph()
+    # 恢复必须用发起诊断的同一份主图实例（同实例同 checkpointer），
+    # interrupt 状态持久化在主图的 Postgres checkpointer 里。
+    graph = await get_agent_graph()
     config = {"configurable": {"thread_id": thread_id}}
     result = await graph.ainvoke(Command(resume=body.model_dump()), config=config)
     diagnosis = result.get("final_diagnosis") or {}

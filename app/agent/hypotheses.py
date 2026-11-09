@@ -195,10 +195,14 @@ def build_final_diagnosis(
             "investigation_rounds": investigation_round,
             "report": "",
         }
+    top = hypotheses[0] if hypotheses else None
     return {
         "status": "unresolved",
-        "primary_cause_key": None,
-        "primary_cause_name": None,
+        # unresolved 也携带 top 假设与修复建议（弱证据低置信建议）：
+        # 交由审批门控复核，高风险动作照常被规则表拦下走审批——
+        # 这正是「网关重启」演示主路径的入口。
+        "primary_cause_key": top["cause_key"] if top else None,
+        "primary_cause_name": top["cause_name"] if top else None,
         "primary_description": (
             "未能定位具体原因，建议人工介入进一步检查。"
             if hypotheses
@@ -206,8 +210,10 @@ def build_final_diagnosis(
         ),
         "evidence": list(observed_evidence),
         "matched_symptom_keys": [],
-        "fix_action": None,
-        "fix_suggestion": "建议联系人工介入排查。",
+        "fix_action": top["fix_action"] if top else None,
+        # fix_suggestion 会被报告模板直接插值：无 top 时必须给人工兜底话术，
+        # 否则报告渲染出字面 None（已复现的空候选路径）。
+        "fix_suggestion": (top["fix_suggestion"] if top else "建议联系人工介入排查。"),
         "alternatives": alternatives,
         "investigation_rounds": investigation_round,
         "report": "",

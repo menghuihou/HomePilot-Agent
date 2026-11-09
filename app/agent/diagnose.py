@@ -26,6 +26,7 @@ from sqlalchemy import func, select
 from app.agent.hypotheses import (
     build_final_diagnosis,
     compute_hypotheses,
+    high_confidence_count,
     select_actions,
     should_conclude,
     shrink,
@@ -42,6 +43,7 @@ from app.models import (
     DeviceEvent,
     FaultCause,
     FaultSymptom,
+    Preference,
     SymptomCause,
 )
 
@@ -197,8 +199,8 @@ async def _query_mcp_device_status(domain: str, device_id: int) -> dict | None:
         tool = tools.get("get_device_status")
         if tool is None:
             return None
-        # 模拟设备 id 与库内自增 id 的近似映射（light-{id}），演示数据已对齐。
-        result = await tool.ainvoke({"device_id": f"light-{device_id}"})
+        # MCP Server 按业务库 devices.id 查询：直接传库内主键。
+        result = await tool.ainvoke({"device_id": str(device_id)})
     except asyncio.CancelledError as exc:
         # 拆成两个子句：避免依赖 PEP 758 的无括号多异常语法（3.14 专属，
         # 且与 ruff format 的规范化行为冲突）。CancelledError 非 Exception
@@ -334,21 +336,35 @@ async def _record_auto_approval(
         await session.commit()
 
 
+async def _home_gateway_device_id(home_id: int) -> int | None:
+    """解析家庭网关设备主键（重启网关的执行目标）。"""
+    async with session_factory() as session:
+        row = await session.execute(
+            select(Device.id).where(
+                Device.home_id == home_id,
+                Device.device_type == "gateway",
+            )
+        )
+        return row.scalars().first()
+
+
 async def default_executor(action: str, diagnosis: dict) -> str:
     """MVP 执行器：仅网关重启接入 MCP 工具；其余动作如实提示需人工。
 
     执行失败不冒充成功——如实返回失败说明，由报告转述给用户。
-    gateway-1 为模拟映射近似值；多网关家庭需改为按 target 解析真实网关 id，
-    并对工具返回的 dict 结果做格式化后再进报告。
+    网关 id 从业务库按家庭解析（device_type=gateway），传入 MCP 工具。
     """
     if action != "restart_gateway":
         return f"动作 {action} 暂无自动执行器，建议已记录，请人工处理"
+    gateway_id = await _home_gateway_device_id(diagnosis.get("home_id"))
+    if gateway_id is None:
+        return "执行失败：当前家庭未配置网关设备，请人工处理"
     try:
         tools = {tool.name: tool for tool in await get_light_tools()}
         tool = tools.get("restart_gateway")
         if tool is None:
             return "执行失败：重启网关工具不可用，请人工处理"
-        result = await tool.ainvoke({"gateway_id": "gateway-1"})
+        result = await tool.ainvoke({"gateway_id": str(gateway_id)})
     except asyncio.CancelledError as exc:
         # 拆分理由同 _query_mcp_device_status：不依赖 3.14 专属语法。
         logger.warning("网关重启执行失败", exc_info=exc)
@@ -357,6 +373,86 @@ async def default_executor(action: str, diagnosis: dict) -> str:
         logger.warning("网关重启执行失败", exc_info=True)
         return "执行失败：网关重启工具暂不可用，请人工处理"
     return f"网关重启完成：{result}"
+
+
+def _hypotheses_top(hypotheses: list[dict], limit: int = 5) -> list[dict]:
+    """候选假设摘要：观测入参/输出统一使用，避免 ORM/大对象进 trace。"""
+    keys = (
+        "cause_key",
+        "cause_name",
+        "prevalence",
+        "matched_evidence_count",
+        "matched_symptom_keys",
+    )
+    return [{key: h[key] for key in keys} for h in hypotheses[:limit]]
+
+
+@observe(name="compute-hypotheses")
+def _hypotheses_observation(
+    domain: str, hypotheses: list[dict], round_index: int
+) -> dict:
+    """观测点：候选假设集与排序（评估口径与排查定位依据）。"""
+    return {
+        "domain": domain,
+        "candidate_count": len(hypotheses),
+        "round": round_index,
+        "top": _hypotheses_top(hypotheses),
+    }
+
+
+@observe(name="investigate-round")
+def _investigation_observation(
+    round_index: int,
+    layer: str,
+    new_evidence: list[str],
+    hypotheses: list[dict],
+) -> dict:
+    """观测点：每轮排查的层、新证据与收缩后领先组。"""
+    return {
+        "round": round_index,
+        "layer": layer,
+        "new_evidence": new_evidence,
+        "leader_count": high_confidence_count(hypotheses),
+        "top": _hypotheses_top(hypotheses, limit=3),
+    }
+
+
+@observe(name="conclude")
+def _conclusion_observation(diagnosis: dict) -> dict:
+    """观测点：最终结论摘要（状态、主结论、依据与建议）。"""
+    keys = (
+        "status",
+        "primary_cause_key",
+        "primary_cause_name",
+        "matched_symptom_keys",
+        "fix_action",
+        "fix_suggestion",
+        "investigation_rounds",
+    )
+    return {key: diagnosis.get(key) for key in keys}
+
+
+@observe(name="approval-gate")
+def _approval_observation(
+    decision_info, decision: str, execution_result: str | None
+) -> dict:
+    """观测点：审批门控判定、用户决策与执行结果。"""
+    if decision_info is None:
+        return {
+            "action": None,
+            "risk_level": "low",
+            "decision": decision,
+            "execution_result": execution_result,
+        }
+    return {
+        "action": decision_info.action,
+        "risk_level": decision_info.risk_level,
+        "allowed": decision_info.allowed,
+        "require_approval": decision_info.require_approval,
+        "decision": decision,
+        "reason": decision_info.reason,
+        "execution_result": execution_result,
+    }
 
 
 def _filter_assertions(text: str) -> tuple[str, list[tuple[str, str]]]:
@@ -396,9 +492,16 @@ def _rule_template_report(diagnosis: dict) -> str:
             f"根据排查，你描述的问题可能由{diagnosis['primary_cause_name']}导致，"
             f"建议：{diagnosis['fix_suggestion']}{alternative_text}"
         )
+    # unresolved 两种子情况：有 top 假设（低置信建议）与完全无头绪。
+    if diagnosis["primary_cause_name"]:
+        return (
+            f"经过 {diagnosis['investigation_rounds']} 轮排查暂未能确定具体原因，"
+            f"最可能的原因为「{diagnosis['primary_cause_name']}」（低置信度），"
+            f"建议：{diagnosis['fix_suggestion']} 如仍无法解决，请人工介入进一步检查。"
+        )
     return (
-        f"经过 {diagnosis['investigation_rounds']} 轮排查未能定位具体原因，"
-        f"{diagnosis['fix_suggestion']}"
+        f"经过 {diagnosis['investigation_rounds']} 轮排查未能识别设备或症状，"
+        "建议人工介入进一步检查。"
     )
 
 
@@ -427,7 +530,7 @@ async def _invoke_extraction(model, prompt_messages: list, config=None):
 @observe(name="symptom-resolve")
 def _resolve_symptom(
     slots: SymptomSlots | None,
-    devices: list,
+    devices: list[dict],
     valid_keys: dict[str, set[str]],
 ) -> dict:
     """确定性解析：设备匹配 → 域映射 → symptom_key 知识库验证。
@@ -439,10 +542,10 @@ def _resolve_symptom(
     if slots is not None:
         # strip 归一：消除 LLM 输出或设备名首尾空白造成的误兜底。
         device = next(
-            (d for d in devices if d.name.strip() == slots.device_name.strip()),
+            (d for d in devices if d["name"].strip() == slots.device_name.strip()),
             None,
         )
-    domain = DOMAIN_BY_DEVICE_TYPE.get(device.device_type, "") if device else ""
+    domain = DOMAIN_BY_DEVICE_TYPE.get(device["device_type"], "") if device else ""
     known_keys = valid_keys.get(domain, set())
     fallback = slots is None or domain == "" or slots.symptom_key not in known_keys
     symptom_key = FALLBACK_SYMPTOM_KEY if fallback else slots.symptom_key
@@ -458,8 +561,8 @@ def _resolve_symptom(
     return {
         "device_name": slots.device_name if slots else "",
         "room": (slots.room or None) if slots else None,
-        "device_id": device.id if device else None,
-        "device_type": device.device_type if device else None,
+        "device_id": device["id"] if device else None,
+        "device_type": device["device_type"] if device else None,
         "domain": domain or "unknown",
         "symptom_key": symptom_key,
         "fallback": fallback,
@@ -500,6 +603,40 @@ def build_diagnose_graph(
             )
             symptom_rows = (await session.execute(select(FaultSymptom))).scalars().all()
 
+        # 观察点边界统一转纯 dict：ORM 对象进 Langfuse 入参会被序列化成
+        # 空 dict，破坏 trace 可读性。
+        device_dicts = [
+            {"id": d.id, "name": d.name, "device_type": d.device_type} for d in devices
+        ]
+        # 偏好别名（device_alias:{id} = 别名）并入匹配表：
+        # 「主灯」等用户称呼可直接进入诊断，无需 LLM 猜测映射。
+        alias_prefs = (
+            (
+                await session.execute(
+                    select(Preference).where(
+                        Preference.home_id == state["home_id"],
+                        Preference.pref_key.like("device_alias:%"),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        device_by_id = {d.id: d for d in devices}
+        for pref in alias_prefs:
+            _, _, raw_id = pref.pref_key.partition(":")
+            if not raw_id.isdigit() or int(raw_id) not in device_by_id:
+                continue
+            alias_target = device_by_id[int(raw_id)]
+            device_dicts.append(
+                {
+                    "id": alias_target.id,
+                    "name": pref.pref_value,
+                    "device_type": alias_target.device_type,
+                    "is_alias": True,
+                }
+            )
+
         valid_keys: dict[str, set[str]] = {}
         for row in symptom_rows:
             valid_keys.setdefault(row.device_type, set()).add(row.symptom_key)
@@ -509,7 +646,10 @@ def build_diagnose_graph(
             slots = None
         else:
             device_list = (
-                "、".join(f"{d.name}(id={d.id}, {d.device_type})" for d in devices)
+                "、".join(
+                    f"{d['name']}(id={d['id']}, {d['device_type']})"
+                    for d in device_dicts
+                )
                 or "无"
             )
             system_prompt = _EXTRACTION_SYSTEM_PROMPT.format(
@@ -530,13 +670,13 @@ def build_diagnose_graph(
                 logger.warning("症状抽取失败，使用通用兜底症状", exc_info=True)
                 slots = None
 
-        symptom = _resolve_symptom(slots, devices, valid_keys)
+        symptom = _resolve_symptom(slots, device_dicts, valid_keys)
         return {
             "symptom": symptom,
             "scope": {
                 "home_id": state["home_id"],
                 "room": symptom["room"],
-                "authorized_device_ids": [d.id for d in devices],
+                "authorized_device_ids": [d["id"] for d in device_dicts],
             },
         }
 
@@ -549,6 +689,7 @@ def build_diagnose_graph(
         causes, pairs = await _load_domain_knowledge(domain)
         matched = [symptom["symptom_key"], *(state.get("observed_evidence") or [])]
         hypotheses = compute_hypotheses(matched, causes, pairs)
+        _hypotheses_observation(domain, hypotheses, 0)
         return {"candidate_hypotheses": hypotheses, "investigation_round": 0}
 
     async def _investigate_round(state: DiagnoseState, config) -> dict:
@@ -563,6 +704,7 @@ def build_diagnose_graph(
         domain = symptom.get("domain", "unknown")
         _, pairs = await _load_domain_knowledge(domain)
         updated = shrink(state.get("candidate_hypotheses") or [], new_evidence, pairs)
+        _investigation_observation(round_index, layer, new_evidence, updated)
         return {
             "observed_evidence": new_evidence,
             "candidate_hypotheses": updated,
@@ -587,6 +729,7 @@ def build_diagnose_graph(
             list(state.get("observed_evidence") or []),
             state.get("investigation_round", 0),
         )
+        _conclusion_observation(diagnosis)
         return {"final_diagnosis": diagnosis}
 
     async def _approval_gate(state: DiagnoseState, config) -> dict:
@@ -600,6 +743,8 @@ def build_diagnose_graph(
         scope = state.get("scope") or {}
         # home_id 是审批审计的必填字段：缺失属于装配错误，直接失败快停。
         home_id = state["home_id"]
+        # 供执行器解析网关等目标设备（写入结论随 trace 可观测）。
+        diagnosis["home_id"] = home_id
         action = diagnosis.get("fix_action")
         thread_id = (config or {}).get("configurable", {}).get("thread_id", "")
         target_device_id = symptom.get("device_id")
@@ -613,6 +758,7 @@ def build_diagnose_graph(
                 "decision": "auto",
                 "reason": "无可执行动作，跳过审批门控",
             }
+            _approval_observation(None, "auto", None)
             return {"final_diagnosis": diagnosis, "risk_level": "low"}
 
         decision_info = judge_risk(action, target_device_id, scope)
@@ -672,6 +818,7 @@ def build_diagnose_graph(
             "reason": decision_info.reason,
         }
         diagnosis["execution_result"] = execution_result
+        _approval_observation(decision_info, decision, execution_result)
         return {"final_diagnosis": diagnosis, "risk_level": decision_info.risk_level}
 
     async def _report(state: DiagnoseState, config) -> dict:
@@ -681,11 +828,24 @@ def build_diagnose_graph(
         blocked 追加越界说明。
         """
         diagnosis = dict(state.get("final_diagnosis") or {})
+        candidate_hypotheses = state.get("candidate_hypotheses") or []
+        symptom = state.get("symptom") or {}
         approval = diagnosis.get("approval") or {}
         decision = approval.get("decision", "auto")
         if decision == "rejected":
             # 计划口径：拒绝 → 报告改写为固定话术，不再转写。
             text = "已记录，未执行，建议人工处理。"
+            diagnosis["report"] = text
+            return {"final_diagnosis": diagnosis, "messages": [AIMessage(content=text)]}
+        if not candidate_hypotheses:
+            # 查无设备/症状未识别：跳过 LLM 转写，直接给指名道姓的提示。
+            device_name = symptom.get("device_name")
+            text = (
+                f"未在当前家庭找到「{device_name}」，请确认设备名称，"
+                "或在家庭中添加该设备后再试。"
+                if device_name
+                else "未能识别设备或症状，建议人工介入进一步检查。"
+            )
             diagnosis["report"] = text
             return {"final_diagnosis": diagnosis, "messages": [AIMessage(content=text)]}
         payload = json.dumps(diagnosis, ensure_ascii=False)
@@ -716,6 +876,10 @@ def build_diagnose_graph(
             if report is not None
             else _apply_wording_filter(_rule_template_report(diagnosis))
         )
+        if not text.strip():
+            # LLM「成功」返回空串也兜底：报告对用户必须非空（空气泡事故）。
+            logger.warning("诊断报告转写为空，回退规则模板")
+            text = _apply_wording_filter(_rule_template_report(diagnosis))
         if decision == "approved":
             text = f"{text}\n操作已执行：{diagnosis.get('execution_result', '')}"
         elif decision == "blocked":
@@ -745,39 +909,22 @@ def build_diagnose_graph(
     return builder.compile(checkpointer=checkpointer)
 
 
-# 审批决策接口续跑用单例：checkpointer 为 AsyncPostgresSaver，
-# 审批挂起状态持久化在 PostgreSQL，进程重启后仍可恢复。
-_diagnose_graph_singleton = None
-
-
-async def get_diagnose_graph():
-    """审批恢复与诊断图挂载的唯一图提供者（同实例同 checkpointer）。
-
-    架构不变量：第 10 步把本子图挂进 chat 主图时必须复用本实例，
-    不得另建——interrupt 状态存在发起诊断的那份 checkpointer 里，
-    恢复接口换实例会导致查不到 thread、审批死锁。
-    """
-    global _diagnose_graph_singleton
-    if _diagnose_graph_singleton is None:
-        # 延迟导入：CRUD 等非诊断路径无需加载 checkpointer 依赖。
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-        from psycopg_pool import AsyncConnectionPool
-
-        # 连接池跟随进程生命周期；v3.2.0 的 saver 不再接受裸连接串，
-        # setup 里的 CREATE INDEX CONCURRENTLY 要求连接 autocommit。
-        pool = AsyncConnectionPool(
-            _checkpoint_conninfo(), open=False, kwargs={"autocommit": True}
-        )
-        await pool.open()
-        saver = AsyncPostgresSaver(pool)
-        # LangGraph 内部表（checkpoints 等），setup 幂等，独立于 Alembic。
-        await saver.setup()
-        _diagnose_graph_singleton = build_diagnose_graph(checkpointer=saver)
-    return _diagnose_graph_singleton
-
-
-def _checkpoint_conninfo() -> str:
+def checkpoint_conninfo() -> str:
     """AsyncConnectionPool 需要 psycopg 原生 URI：去掉 SQLAlchemy 方言前缀。"""
     return get_settings().database_url_sync.replace(
         "postgresql+psycopg://", "postgresql://", 1
     )
+
+
+async def build_checkpoint_pool():
+    """审批续跑共用的 Postgres 连接池（autocommit；saver setup 必需）。
+
+    池跟随进程生命周期，由调用方负责关闭（生产环境即进程退出）。
+    """
+    from psycopg_pool import AsyncConnectionPool
+
+    pool = AsyncConnectionPool(
+        checkpoint_conninfo(), open=False, kwargs={"autocommit": True}
+    )
+    await pool.open()
+    return pool

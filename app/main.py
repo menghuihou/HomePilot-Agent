@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.agent.diagnose import get_diagnose_graph
+from app.agent import chat as chat_module
 from app.config import get_settings
 from app.observability import setup_observability
 from app.routers import approvals, chat, devices, homes, llm, preferences
@@ -19,11 +19,11 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    """诊断审批续跑依赖 LangGraph checkpointer 内部表：启动即建表（幂等）。
+    """审批续跑依赖 LangGraph checkpointer 内部表：启动即建表（幂等）。
 
     独立于 Alembic：这批表属于 LangGraph，不由项目迁移体系管理。
     """
-    await get_diagnose_graph()
+    await chat_module.get_agent_graph()
     yield
 
 

@@ -15,11 +15,14 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.agent.chat as agent_chat_module
 import app.agent.diagnose as diagnose_module
 import app.routers.approvals as approvals_router
+from app.agent.chat import build_agent_graph
 from app.agent.diagnose import DiagnosisReport, SymptomSlots, build_diagnose_graph
 from app.config import get_settings
 from app.main import application
+from tests.test_agent_chat import StubRouterModel
 from tests.test_agent_diagnose import (
     StubDiagnosisModel,
     _create_device,
@@ -256,7 +259,9 @@ def test_decision_endpoint_resumes_approved(client, home_id):
     async def _fake_get_graph():
         return graph
 
-    monkeypatch.setattr(approvals_router, "get_diagnose_graph", _fake_get_graph)
+    # approvals 路由在自己的命名空间直接导入 get_agent_graph：
+    # patch 必须打在 approvals_router 上才能真正生效。
+    monkeypatch.setattr(approvals_router, "get_agent_graph", _fake_get_graph)
     thread_id = f"ap-{uuid.uuid4().hex[:8]}"
     try:
 
@@ -274,14 +279,20 @@ def test_decision_endpoint_resumes_approved(client, home_id):
                         },
                         config=config,
                     )
-                    return await ac.post(
+                    first = await ac.post(
                         f"/approvals/{thread_id}/decision",
                         json={"decision": "approved", "reason": "同意"},
                     )
+                    # 幂等回归：重复提交（双击/刷新）返回已处理而非 404。
+                    repeat = await ac.post(
+                        f"/approvals/{thread_id}/decision",
+                        json={"decision": "approved", "reason": "同意"},
+                    )
+                    return first, repeat
             finally:
                 await engine.dispose()
 
-        resp = asyncio.run(_flow())
+        resp, repeat = asyncio.run(_flow())
 
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -291,6 +302,9 @@ def test_decision_endpoint_resumes_approved(client, home_id):
         assert "操作已执行：模拟执行成功" in body["report"]
         assert executor_calls == ["restart_gateway"]
         assert _approval_rows(thread_id)[-1][0] == "approved"
+        # 幂等：重复提交不报错，返回已处理状态。
+        assert repeat.status_code == 200
+        assert repeat.json()["status"] == "already_processed"
     finally:
         monkeypatch.undo()
         _cleanup_approvals(thread_id)
@@ -308,3 +322,70 @@ def test_decision_endpoint_rejects_invalid_decision(client):
     """decision 取值受限：非法值 422。"""
     resp = client.post("/approvals/unknown-thread/decision", json={"decision": "maybe"})
     assert resp.status_code == 422
+
+
+def test_agent_graph_routes_diagnose_and_resumes(client, home_id):
+    """第 10 步验收：主图挂载诊断子图，interrupt 传播到主图并可恢复。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="device_abnormal"),
+        report=DiagnosisReport(
+            report="可能是网关离线导致。", primary_cause_key="gateway_offline"
+        ),
+    )
+    investigator = _scripted_investigator(HIGH_RISK_SCRIPT)
+    executor_calls: list[str] = []
+    diagnose_graph = build_diagnose_graph(
+        chat_model=model,
+        investigator=investigator,
+        executor=_stub_executor(executor_calls),
+    )
+    engine = create_async_engine(get_settings().database_url)
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    agent = build_agent_graph(
+        router_model=StubRouterModel("diagnose"),
+        chat_model=model,
+        diagnose_graph=diagnose_graph,
+        checkpointer=MemorySaver(),
+    )
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
+    # 主图 load_context / chat 子图用的是 agent_chat.session_factory
+    # （真实 app engine 绑定 TestClient 门户循环），必须一并替换，
+    # 否则跨循环 RuntimeError 会毒化共享连接池并污染后续测试。
+    monkeypatch.setattr(agent_chat_module, "session_factory", session_maker)
+    thread_id = f"ap-{uuid.uuid4().hex[:8]}"
+    try:
+
+        async def _run():
+            try:
+                config = {"configurable": {"thread_id": thread_id}}
+                first = await agent.ainvoke(
+                    {
+                        "messages": [HumanMessage(content="家里灯不对劲")],
+                        "home_id": home_id,
+                    },
+                    config=config,
+                )
+                second = await agent.ainvoke(
+                    Command(resume={"decision": "approved", "reason": ""}),
+                    config=config,
+                )
+                return first, second
+            finally:
+                await engine.dispose()
+
+        first, second = asyncio.run(_run())
+
+        # 子图的 interrupt 传播到主图层级。
+        assert first.get("__interrupt__")
+        # 恢复后走完报告节点，to_answer 把报告作为最终回答返回。
+        assert second["intent"] == "diagnose"
+        assert "操作已执行：模拟执行成功" in second["answer"]
+        approval = second["final_diagnosis"]["approval"]
+        assert approval["decision"] == "approved"
+        assert executor_calls == ["restart_gateway"]
+        assert _approval_rows(thread_id)[-1][0] == "approved"
+    finally:
+        monkeypatch.undo()
+        _cleanup_approvals(thread_id)

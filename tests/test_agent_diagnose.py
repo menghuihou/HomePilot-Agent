@@ -248,6 +248,26 @@ def test_extract_falls_back_on_unknown_device(client, home_id):
     assert symptom["domain"] == "unknown"
     assert symptom["device_name"] == "不存在的设备"
     assert symptom["fallback"] is True
+    # 无候选分支：报告指名道姓提示查无此设备，而非空气泡/空话术。
+    assert "未在当前家庭找到「不存在的设备」" in result["final_diagnosis"]["report"]
+
+
+def test_report_prompts_when_home_has_no_devices(client, home_id):
+    """家庭无设备：解析失败直接给添加设备提示，不再进入排查。"""
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
+        report=DiagnosisReport(
+            report="可能是灯泡坏了。", primary_cause_key="bulb_burned"
+        ),
+    )
+
+    result = _run_extract(home_id, "客厅灯不亮了", model)
+
+    assert result["candidate_hypotheses"] == []
+    report = result["final_diagnosis"]["report"]
+    assert "未在当前家庭找到「客厅灯」" in report
+    # 空家庭没有任何可执行动作：不应产生审批记录。
+    assert result["final_diagnosis"]["approval"]["decision"] == "auto"
 
 
 def test_investigation_converges_in_one_round(client, home_id):
@@ -330,8 +350,11 @@ def test_investigation_hard_cap_forces_conclusion(client, home_id):
     assert investigator.calls == ["device_status", "device_events", "gateway_status"]
     diagnosis = result["final_diagnosis"]
     assert diagnosis["status"] == "unresolved"
-    assert "人工" in diagnosis["fix_suggestion"]
-    assert "未能定位" in diagnosis["report"]
+    # unresolved 携带 top 假设的修复建议（弱证据低置信建议，交审批门控复核）。
+    assert diagnosis["primary_cause_key"] == "bulb_burned"
+    assert diagnosis["fix_action"] == "replace_bulb"
+    assert "暂未能确定" in diagnosis["report"]
+    assert "灯泡损坏" in diagnosis["report"]
 
 
 def test_unknown_domain_skips_investigation(client, home_id):
@@ -346,6 +369,13 @@ def test_unknown_domain_skips_investigation(client, home_id):
     assert result["candidate_hypotheses"] == []
     assert result["investigation_round"] == 0
     assert investigator.calls == []
+    # 空候选报告兜底：fix_suggestion 走人工话术，不得把 None 字面渲染给用户。
+    diagnosis = result["final_diagnosis"]
+    assert diagnosis["status"] == "unresolved"
+    report = diagnosis["report"]
+    assert "None" not in report
+    # 查无设备：指名道姓提示，便于用户自查或补录设备。
+    assert "未在当前家庭找到「不存在的设备」" in report
 
 
 def test_filter_assertions_replaces_over_assertions():
@@ -443,4 +473,53 @@ def test_report_falls_back_when_llm_returns_none(client, home_id):
 
     report = result["final_diagnosis"]["report"]
     assert "根据排查" in report
+    assert "区域停电" in report
+
+
+def test_alias_device_resolves_in_diagnosis(client, home_id):
+    """别名（主灯=客厅灯）经偏好表解析后正常进入诊断（变量遮蔽回归）。"""
+    device_id = _create_device(client, home_id, "客厅灯", "light")
+    resp = client.put(
+        f"/homes/{home_id}/preferences",
+        json={"pref_key": f"device_alias:{device_id}", "pref_value": "主灯"},
+    )
+    assert resp.status_code in (200, 201), resp.text
+
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="主灯", symptom_key="light_not_on"),
+        report=DiagnosisReport(
+            report="可能是停电了。", primary_cause_key="power_outage"
+        ),
+    )
+    investigator = _scripted_investigator({"device_status": ["light_offline"]})
+
+    result = _run_extract(home_id, "主灯不亮了", model, investigator)
+
+    symptom = result["symptom"]
+    assert symptom["device_id"] == device_id
+    assert symptom["domain"] == "light"
+    assert symptom["symptom_key"] == "light_not_on"
+    assert symptom["fallback"] is False
+
+
+def test_report_falls_back_when_llm_returns_blank_text(client, home_id):
+    """LLM「成功」返回空串报告：同样回退模板，杜绝空气泡。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
+        report=DiagnosisReport(report="   ", primary_cause_key="power_outage"),
+    )
+    investigator = _scripted_investigator({"device_status": ["light_offline"]})
+
+    result = _run_extract(
+        home_id,
+        "客厅灯不亮了",
+        model,
+        investigator,
+        resume="approved",
+        executor=_stub_executor([]),
+    )
+
+    report = result["final_diagnosis"]["report"]
+    assert report.strip()
     assert "区域停电" in report
