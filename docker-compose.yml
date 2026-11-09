@@ -6,6 +6,10 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?请在 .env 中设置 POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER:?请在 .env 中设置 POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 中设置 POSTGRES_PASSWORD}
+      # 时区设为北京：now()/日志/未指定时区的显示默认北京时间；
+      # timestamptz 列仍存绝对时刻，语义不受影响（UTC 存储 + 本地显示）。
+      PGTZ: Asia/Shanghai
+      TZ: Asia/Shanghai
     ports:
       - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
