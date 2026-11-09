@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import operator
+from collections.abc import Awaitable, Callable
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
@@ -348,31 +349,60 @@ async def _home_gateway_device_id(home_id: int) -> int | None:
         return row.scalars().first()
 
 
-async def default_executor(action: str, diagnosis: dict) -> str:
-    """MVP 执行器：仅网关重启接入 MCP 工具；其余动作如实提示需人工。
+# 系统可自动执行的动作注册表：动作 → 执行器（单一事实来源）。
+# 门控据此区分可执行动作与人工建议：不在集合内 = 人工建议类动作，
+# 只作为报告建议呈现，不走审批门控。新增执行器用 @_registers 登记
+# 一个函数即可，EXECUTABLE_ACTIONS 自动派生；动作仍需在
+# app/agent/risk_rules.py 规则表登记——未登记的可执行动作会被
+# fail-safe 判 high 走审批，安全兜底仍在。
+_ACTION_EXECUTORS: dict[str, Callable[[dict], Awaitable[str]]] = {}
 
-    执行失败不冒充成功——如实返回失败说明，由报告转述给用户。
-    网关 id 从业务库按家庭解析（device_type=gateway），传入 MCP 工具。
-    """
-    if action != "restart_gateway":
-        return f"动作 {action} 暂无自动执行器，建议已记录，请人工处理"
+
+def _registers(action: str):
+    """登记执行器；action 由此自动进入 EXECUTABLE_ACTIONS。"""
+
+    def _deco(fn):
+        _ACTION_EXECUTORS[action] = fn
+        return fn
+
+    return _deco
+
+
+@_registers("restart_gateway")
+async def _execute_restart_gateway(diagnosis: dict) -> str:
+    """重启网关：网关 id 从业务库按家庭解析，传入 MCP 工具。"""
     gateway_id = await _home_gateway_device_id(diagnosis.get("home_id"))
     if gateway_id is None:
         return "执行失败：当前家庭未配置网关设备，请人工处理"
+    tools = {tool.name: tool for tool in await get_light_tools()}
+    tool = tools.get("restart_gateway")
+    if tool is None:
+        return "执行失败：重启网关工具不可用，请人工处理"
+    result = await tool.ainvoke({"gateway_id": str(gateway_id)})
+    return f"网关重启完成：{result}"
+
+
+EXECUTABLE_ACTIONS = frozenset(_ACTION_EXECUTORS)
+
+
+async def default_executor(action: str, diagnosis: dict) -> str:
+    """MVP 执行器：查注册表分发；未登记动作如实提示需人工。
+
+    执行失败不冒充成功——异常统一兜底为失败说明，由报告转述给用户；
+    执行器只写快乐路径与资源缺失的优雅返回，无需各自处理异常。
+    """
+    executor = _ACTION_EXECUTORS.get(action)
+    if executor is None:
+        return f"动作 {action} 暂无自动执行器，建议已记录，请人工处理"
     try:
-        tools = {tool.name: tool for tool in await get_light_tools()}
-        tool = tools.get("restart_gateway")
-        if tool is None:
-            return "执行失败：重启网关工具不可用，请人工处理"
-        result = await tool.ainvoke({"gateway_id": str(gateway_id)})
+        return await executor(diagnosis)
     except asyncio.CancelledError as exc:
         # 拆分理由同 _query_mcp_device_status：不依赖 3.14 专属语法。
-        logger.warning("网关重启执行失败", exc_info=exc)
-        return "执行失败：网关重启工具暂不可用，请人工处理"
+        logger.warning("%s 执行失败", action, exc_info=exc)
+        return "执行失败：工具暂不可用，请人工处理"
     except Exception:
-        logger.warning("网关重启执行失败", exc_info=True)
-        return "执行失败：网关重启工具暂不可用，请人工处理"
-    return f"网关重启完成：{result}"
+        logger.warning("%s 执行失败", action, exc_info=True)
+        return "执行失败：工具暂不可用，请人工处理"
 
 
 def _hypotheses_top(hypotheses: list[dict], limit: int = 5) -> list[dict]:
@@ -759,6 +789,19 @@ def build_diagnose_graph(
                 "reason": "无可执行动作，跳过审批门控",
             }
             _approval_observation(None, "auto", None)
+            return {"final_diagnosis": diagnosis, "risk_level": "low"}
+        if action not in EXECUTABLE_ACTIONS:
+            # 人工建议类动作（重插电源线/更换灯泡/联系电工等）：
+            # 系统无执行器，审批无意义——只作为报告建议呈现给用户，
+            # 不产生审批记录，也不做风险判定。
+            diagnosis["risk_level"] = "low"
+            diagnosis["approval"] = {
+                "action": action,
+                "risk_level": "low",
+                "decision": "advice",
+                "reason": "人工建议类动作，无需审批，直接呈现给用户",
+            }
+            _approval_observation(None, "advice", None)
             return {"final_diagnosis": diagnosis, "risk_level": "low"}
 
         decision_info = judge_risk(action, target_device_id, scope)

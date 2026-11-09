@@ -17,9 +17,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.agent.chat as agent_chat_module
 import app.agent.diagnose as diagnose_module
+import app.agent.risk_rules as risk_rules_module
 import app.routers.approvals as approvals_router
 from app.agent.chat import build_agent_graph
 from app.agent.diagnose import DiagnosisReport, SymptomSlots, build_diagnose_graph
+from app.agent.risk_rules import RiskRule
 from app.config import get_settings
 from app.main import application
 from tests.test_agent_chat import StubRouterModel
@@ -195,8 +197,8 @@ def test_high_risk_rejected_skips_execution(client, home_id):
         _cleanup_approvals(thread_id)
 
 
-def test_low_risk_auto_without_interrupt(client, home_id):
-    """低风险动作不挂起：decision=auto 直接落库并正常出报告。"""
+def test_advice_action_without_interrupt_or_record(client, home_id):
+    """人工建议类动作（无执行器）：不走审批门控，不产生审批记录。"""
     _create_device(client, home_id, "客厅灯", "light")
     model = StubDiagnosisModel(
         slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
@@ -225,12 +227,69 @@ def test_low_risk_auto_without_interrupt(client, home_id):
 
         result = asyncio.run(_run())
 
-        # check_power 在规则表为 low → 自动放行，不挂起审批。
+        assert "__interrupt__" not in result
+        approval = result["final_diagnosis"]["approval"]
+        assert approval["decision"] == "advice"
+        assert result["final_diagnosis"]["risk_level"] == "low"
+        assert result["final_diagnosis"]["report"] == "可能是停电了。"
+        rows = _approval_rows(thread_id)
+        assert not rows, "人工建议类动作不应产生审批记录"
+    finally:
+        monkeypatch.undo()
+        _cleanup_approvals(thread_id)
+
+
+def test_executable_low_action_auto_records_without_interrupt(client, home_id):
+    """可执行低风险动作（规则表登记）：decision=auto 落库留痕，不挂起。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
+        report=DiagnosisReport(
+            report="可能是停电了。", primary_cause_key="power_outage"
+        ),
+    )
+    investigator = _scripted_investigator(
+        {"device_status": ["light_offline"], "device_events": [], "gateway_status": []}
+    )
+    graph, monkeypatch, engine, _ = _build_graph(model, investigator)
+    # 注入一条可执行低风险规则，覆盖 auto 放行分支。
+    monkeypatch.setattr(
+        risk_rules_module,
+        "_RULES_BY_ACTION",
+        {
+            **risk_rules_module._RULES_BY_ACTION,
+            "check_power": RiskRule(
+                action="check_power", level="low", require_approval=False
+            ),
+        },
+    )
+    # check_power 同时注册为可执行动作：进入 judge_risk 的 auto 分支。
+    monkeypatch.setattr(
+        diagnose_module,
+        "EXECUTABLE_ACTIONS",
+        {*diagnose_module.EXECUTABLE_ACTIONS, "check_power"},
+    )
+    thread_id = f"ap-{uuid.uuid4().hex[:8]}"
+    try:
+
+        async def _run():
+            try:
+                return await graph.ainvoke(
+                    {
+                        "messages": [HumanMessage(content="客厅灯不亮了")],
+                        "home_id": home_id,
+                    },
+                    config={"configurable": {"thread_id": thread_id}},
+                )
+            finally:
+                await engine.dispose()
+
+        result = asyncio.run(_run())
+
         assert "__interrupt__" not in result
         approval = result["final_diagnosis"]["approval"]
         assert approval["decision"] == "auto"
         assert result["final_diagnosis"]["risk_level"] == "low"
-        assert result["final_diagnosis"]["report"] == "可能是停电了。"
         rows = _approval_rows(thread_id)
         assert rows[-1][0] == "auto"
         assert rows[-1][1] == "check_power"

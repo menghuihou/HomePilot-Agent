@@ -292,8 +292,8 @@ def test_investigation_converges_in_one_round(client, home_id):
     assert diagnosis["status"] == "concluded"
     assert diagnosis["primary_cause_key"] == "power_outage"
     assert diagnosis["report"]
-    # check_power 已入规则表为 low → 自动放行，不挂起审批。
-    assert diagnosis["approval"]["decision"] == "auto"
+    # check_power 为人工建议类动作（无执行器）→ advice，不走审批门控。
+    assert diagnosis["approval"]["decision"] == "advice"
 
 
 def test_investigation_shrinks_leader_to_two_in_two_rounds(client, home_id):
@@ -306,20 +306,12 @@ def test_investigation_shrinks_leader_to_two_in_two_rounds(client, home_id):
         {"device_status": ["light_buzz"], "device_events": ["light_overheat"]}
     )
 
-    executor_calls: list[str] = []
-
-    async def _executor(action: str, diagnosis: dict) -> str:
-        executor_calls.append(action)
-        return "模拟执行成功"
-
     # reduce_load 不在规则表 → high 兜底 → 挂起审批，恢复后执行。
     result = _run_extract(
         home_id,
         "客厅灯不太对劲",
         model,
         investigator,
-        resume="approved",
-        executor=_executor,
     )
 
     assert result["investigation_round"] == 2
@@ -331,8 +323,8 @@ def test_investigation_shrinks_leader_to_two_in_two_rounds(client, home_id):
     )
     assert investigator.calls == ["device_status", "device_events"]
     assert result["final_diagnosis"]["status"] == "concluded"
-    assert result["final_diagnosis"]["approval"]["decision"] == "approved"
-    assert executor_calls == ["reduce_load"]
+    # reduce_load 为人工建议类动作（无执行器）→ advice，不走审批门控。
+    assert result["final_diagnosis"]["approval"]["decision"] == "advice"
 
 
 def test_investigation_hard_cap_forces_conclusion(client, home_id):
@@ -355,6 +347,59 @@ def test_investigation_hard_cap_forces_conclusion(client, home_id):
     assert diagnosis["fix_action"] == "replace_bulb"
     assert "暂未能确定" in diagnosis["report"]
     assert "灯泡损坏" in diagnosis["report"]
+
+
+def test_advice_action_skips_gate_and_approval_record(client, home_id):
+    """人工建议类动作（无执行器）：不走审批门控，不产生审批记录。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubExtractionModel(
+        SymptomSlots(device_name="客厅灯", symptom_key="light_not_on")
+    )
+    investigator = _scripted_investigator({})
+
+    result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+
+    approval = result["final_diagnosis"]["approval"]
+    assert approval["decision"] == "advice"
+    assert approval["action"] == "replace_bulb"
+    conninfo = get_settings().database_url_sync.replace(
+        "postgresql+psycopg://", "postgresql://", 1
+    )
+    with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM approvals WHERE home_id = %s", (home_id,))
+        assert cur.fetchone()[0] == 0
+
+
+def test_unregistered_executable_action_failsafe_interrupts(client, home_id):
+    """可执行但规则表未登记：fail-safe 判 high 走审批，兜底在门控层生效。
+
+    replace_driver 在种子数据存在但未入规则表：登记为可执行动作后，
+    judge_risk 应 fail-safe 判 high 并挂起审批，而非静默放行。
+    """
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubExtractionModel(
+        SymptomSlots(device_name="客厅灯", symptom_key="light_not_on")
+    )
+    # light_flicker 只映射 driver_failure：使其以 2 次命中成为 top，
+    # fix_action=replace_driver（规则表未登记）。
+    investigator = _scripted_investigator({"device_status": ["light_flicker"]})
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        diagnose_module, "EXECUTABLE_ACTIONS", frozenset({"replace_driver"})
+    )
+    try:
+        result = _run_extract(home_id, "客厅灯不亮了", model, investigator)
+    finally:
+        monkeypatch.undo()
+
+    interrupts = result.get("__interrupt__") or ()
+    assert len(interrupts) == 1
+    payload = interrupts[0].value
+    assert payload["action"] == "replace_driver"
+    assert payload["risk_level"] == "high"
+    diagnosis = result["final_diagnosis"]
+    assert diagnosis["status"] == "concluded"
+    assert diagnosis["primary_cause_key"] == "driver_failure"
 
 
 def test_unknown_domain_skips_investigation(client, home_id):
