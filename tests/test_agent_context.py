@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.agent.context import DEFAULT_HOME_MODE, HOME_MODE_KEY, resolve_home_context
 from app.config import get_settings
 from app.models import Home
-from db.seeds.load_family import SEED_HOME_NAME
+from db.seeds.load_family import SEED_HOME_NAME, SEED_ROOMS
 
 
 def _resolve(home_id: int):
@@ -95,5 +95,6 @@ def test_seed_family_context(db_ready):
 
     context = asyncio.run(_run())
 
-    assert len(context.rooms) == 3
+    # 房间数从种子常量派生，种子扩充（第 4 周 3 → 5 个房间）时无需改断言。
+    assert len(context.rooms) == len(SEED_ROOMS)
     assert len(context.members) == 2
