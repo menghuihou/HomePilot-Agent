@@ -7,6 +7,7 @@ from pathlib import Path
 
 import psycopg
 
+from app.agent.anomaly_rules import OFFLINE_TIMEOUT
 from app.config import get_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -138,9 +139,13 @@ def test_seed_demo_anomaly_events(db_ready) -> None:
     event_type, payload, occurred_at = _latest_event("家庭网关")
     assert event_type == "offline", (event_type, payload)
     assert payload == {"online": False}, payload
-    # occurred_at 由脚本回拨 3 小时；窗口放宽到 2-4 小时避免执行延迟抖动。
+    # occurred_at 在首次播种时回拨 3 小时并冻结；离线时长只会随真实时间
+    # 增长，巡检规则（age > OFFLINE_TIMEOUT）始终命中，故只断言超过阈值
+    # 下限，不设上限窗口（否则次日运行测试必然失败）。
     age_hours = (datetime.now(UTC) - occurred_at).total_seconds() / 3600
-    assert 2 < age_hours < 4, f"网关离线事件距今 {age_hours:.1f} 小时，不符合预置"
+    assert age_hours > OFFLINE_TIMEOUT.total_seconds() / 3600, (
+        f"网关离线事件距今 {age_hours:.1f} 小时，必须超过离线超时阈值才能命中演示异常"
+    )
 
     event_type, payload, _ = _latest_event("客厅温湿度传感器")
     assert event_type == "battery_low", (event_type, payload)
