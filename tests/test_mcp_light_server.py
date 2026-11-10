@@ -1,4 +1,4 @@
-"""灯光域 MCP Server 测试：工具注册、DB 状态读写与事件留痕。
+"""设备 MCP Server 测试：工具注册、按域状态推导、DB 状态读写与事件留痕。
 
 使用 fastmcp 内存客户端直连 Server 对象；数据走真实本地库，
 每个用例独立家庭/设备，结束清理。Server 引擎为 NullPool：
@@ -138,7 +138,9 @@ def test_get_device_status_without_events_is_offline(seeded_home):
     status = _call("get_device_status", {"device_id": str(device_id)})
 
     assert status["online"] is False
-    assert status["brightness"] == 0
+    # 从未上报事件的设备统一返回最小离线状态，不携带任何域专属字段。
+    assert status["last_seen_at"] is None
+    assert "brightness" not in status
 
 
 def test_turn_on_appends_power_on_event(seeded_home):
@@ -172,12 +174,76 @@ def test_unknown_device_returns_explicit_error(seeded_home):
     assert "错误" in message
 
 
-def test_rejects_non_light_device(seeded_home):
+def test_turn_light_on_rejects_non_light_device(seeded_home):
+    """控制类工具保持灯光域限制；只有只读状态查询泛化到全设备域。"""
     device_id = _create_device(seeded_home, "卧室空调", "thermostat")
+
+    message = _call("turn_light_on", {"device_id": str(device_id)})
+
+    assert "不是灯光设备" in message
+
+
+def test_get_device_status_thermostat_reports_temperature(seeded_home):
+    device_id = _create_device(seeded_home, "卧室空调", "thermostat")
+    _append_sync_event(device_id, "power_on", {"target_temperature": 26})
 
     status = _call("get_device_status", {"device_id": str(device_id)})
 
-    assert "不是灯光设备" in status["error"]
+    assert status["online"] is True
+    assert status["target_temperature"] == 26
+    assert status["temperature"] is None
+    assert status["last_seen_at"]
+
+
+def test_get_device_status_sensor_reports_battery(seeded_home):
+    device_id = _create_device(seeded_home, "客厅温湿度传感器", "sensor")
+    _append_sync_event(device_id, "battery_low", {"battery": 8})
+
+    status = _call("get_device_status", {"device_id": str(device_id)})
+
+    assert status["online"] is True
+    assert status["battery"] == 8
+    assert status["last_seen_at"]
+
+
+def test_get_device_status_sensor_without_battery_omits_field(seeded_home):
+    """电量未上报的传感器不带 battery 字段——供异常规则跳过低电量判定。"""
+    device_id = _create_device(seeded_home, "卧室人体传感器", "sensor")
+    _append_sync_event(device_id, "heartbeat", {"online": True})
+
+    status = _call("get_device_status", {"device_id": str(device_id)})
+
+    assert status["online"] is True
+    assert "battery" not in status
+
+
+def test_get_device_status_gateway_online_follows_payload(seeded_home):
+    device_id = _create_device(seeded_home, "家庭网关", "gateway")
+
+    # heartbeat 事件 payload online=True → 在线。
+    _append_sync_event(device_id, "heartbeat", {"online": True})
+    status = _call("get_device_status", {"device_id": str(device_id)})
+    assert status["online"] is True
+    assert status["last_seen_at"]
+
+    # 后写入的 offline 事件成为最新事件：online 以 payload 为准 → 离线。
+    _append_sync_event(device_id, "offline", {"online": False})
+    status = _call("get_device_status", {"device_id": str(device_id)})
+    assert status["online"] is False
+
+
+def test_get_device_status_unknown_type_returns_minimal_status(seeded_home):
+    """未建模的设备域只返回 online + last_seen_at，不编造域专属字段。"""
+    device_id = _create_device(seeded_home, "客厅新风", "wind")
+    _append_sync_event(device_id, "heartbeat", {"online": True})
+
+    status = _call("get_device_status", {"device_id": str(device_id)})
+
+    assert status["online"] is True
+    assert status["last_seen_at"]
+    assert "brightness" not in status
+    assert "battery" not in status
+    assert "target_temperature" not in status
 
 
 def test_restart_gateway_appends_event(seeded_home):
