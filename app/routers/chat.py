@@ -239,6 +239,8 @@ async def chat_stream(
                     "total_devices": inspect_result.get("total_devices"),
                     "normal_count": inspect_result.get("normal_count"),
                     "anomalies": inspect_result.get("anomalies", []),
+                    "reminders": inspect_result.get("reminders", []),
+                    "pending_approvals": inspect_result.get("pending_approvals", []),
                     "summary_text": inspect_result.get("summary_text", ""),
                 },
             )

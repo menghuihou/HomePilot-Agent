@@ -8,6 +8,7 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import psycopg
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -319,3 +320,74 @@ def test_router_without_human_message_falls_back_to_chat():
 
     assert intent == "chat"
     assert stub.received_messages == []
+
+
+def _insert_pending_approval(home_id: int, action: str = "restart_gateway") -> int:
+    """直接落一条 pending 审批（decision 为空），供日报待确认清单测试。"""
+    conninfo = get_settings().database_url_sync.replace(
+        "postgresql+psycopg://", "postgresql://", 1
+    )
+    with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO approvals (thread_id, home_id, action, risk_level, decision,
+                                   synthetic, source_type)
+            VALUES (%s, %s, %s, 'high', NULL, TRUE, 'test') RETURNING id
+            """,
+            (f"dx-{uuid.uuid4().hex[:8]}", home_id, action),
+        )
+        approval_id = cur.fetchone()[0]
+        conn.commit()
+        return approval_id
+
+
+def test_inspect_daily_report_phrasing_includes_pending_approvals(client, home_id):
+    """日报话术（「家庭报告」）→ daily_report 模式：报告含待确认审批清单。"""
+    client.post(
+        f"/homes/{home_id}/devices",
+        json={"name": "客厅灯", "device_type": "light"},
+    )
+    _insert_pending_approval(home_id, "restart_gateway")
+    recent = datetime.now(UTC).isoformat()
+    statuses = {1: {"online": True, "last_seen_at": recent}}
+
+    async def fetcher(device: dict) -> dict:
+        return dict(
+            statuses.get(device["id"], {"online": True, "last_seen_at": recent})
+        )
+
+    result = _run_graph(
+        home_id,
+        "生成一份家庭报告",
+        router_intent="inspect",
+        inspect_graph=build_inspect_graph(status_fetcher=fetcher),
+    )
+
+    assert result["report_type"] == "daily_report"
+    assert result["answer"].startswith("家庭日报：")
+    assert "待确认操作：restart_gateway" in result["answer"]
+    assert "需要处理吗？" in result["answer"]
+
+
+def test_inspect_inspection_phrasing_stays_plain(client, home_id):
+    """纯巡检话术 → inspection 模式：不含日报前缀与待确认段落。"""
+    client.post(
+        f"/homes/{home_id}/devices",
+        json={"name": "客厅灯", "device_type": "light"},
+    )
+    _insert_pending_approval(home_id, "restart_gateway")
+    recent = datetime.now(UTC).isoformat()
+
+    async def fetcher(device: dict) -> dict:
+        return {"online": True, "last_seen_at": recent}
+
+    result = _run_graph(
+        home_id,
+        "帮我看看家里设备都正常吗",
+        router_intent="inspect",
+        inspect_graph=build_inspect_graph(status_fetcher=fetcher),
+    )
+
+    assert result["report_type"] == "inspection"
+    assert result["answer"].startswith("检查了 1 台设备")
+    assert "待确认操作" not in result["answer"]

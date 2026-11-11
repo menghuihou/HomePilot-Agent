@@ -172,6 +172,18 @@ if prompt := st.chat_input("和助手聊聊，例如：把客厅灯叫主灯"):
                 )
             if not result.get("anomalies"):
                 st.success("所有设备运行正常。")
+            if result.get("reminders"):
+                st.markdown("**🔔 提醒**")
+                for reminder in result.get("reminders", []):
+                    st.markdown(f"- {reminder}")
+            if result.get("pending_approvals"):
+                actions = "；".join(
+                    f"{item.get('action')}（{item.get('created_date')}发起）"
+                    for item in result.get("pending_approvals", [])
+                )
+                st.warning(
+                    f"📋 待确认操作：{actions}，需要处理时请到对应会话完成审批。"
+                )
     if captured.get("approval"):
         # 审批卡片在整页刷新后仍需可交互：存入会话状态，下方统一渲染。
         st.session_state.pending_approval = captured["approval"]

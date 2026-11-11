@@ -21,9 +21,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agent.context import HomeContext, resolve_home_context
 from app.agent.diagnose import build_checkpoint_pool, build_diagnose_graph
-from app.agent.inspect import build_inspect_graph
+from app.agent.inspect import build_inspect_graph, detect_report_type
 from app.agent.router import classify_intent, reply_for_intent, summarize_home_context
-from app.agent.state import AgentState
+from app.agent.state import AgentState, last_human_message
 from app.database import session_factory
 from app.llm_client import build_chat_model, default_model_name, extract_text_content
 from app.mcp.client import get_light_tools
@@ -213,7 +213,16 @@ def build_agent_graph(
             state["messages"], state["home_context"], chat_model=router_model
         )
         _route_observation(intent, state["home_id"])
-        return {"intent": intent}
+        updates: dict = {"intent": intent}
+        if intent == "inspect":
+            # 话术细分（第 9 步口径）：日报请求升格为 daily_report 模式，
+            # 巡检子图才会把待确认操作与提醒拼进报告（确定性关键词，零 LLM）。
+            human_message = last_human_message(state["messages"])
+            report_type = detect_report_type(
+                human_message.content if human_message else ""
+            )
+            updates["report_type"] = report_type
+        return updates
 
     @observe(name="agent-route")
     def _route_observation(intent: str, home_id: int) -> dict:

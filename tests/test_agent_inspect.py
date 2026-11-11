@@ -23,6 +23,7 @@ from app.agent.inspect import (
     _make_llm_summarizer,
     build_inspect_graph,
     build_reminders,
+    detect_report_type,
     format_daily_report,
     format_template_summary,
     query_all_devices,
@@ -573,9 +574,12 @@ def test_format_daily_report_full_sections():
 
     assert text.splitlines() == [
         "家庭日报：检查了 8 台设备：6 台正常，2 台异常。",
+        "",
         "提醒：客厅温湿度传感器电量偏低，需要我提醒你购买电池吗？",
+        "",
         "另有 1 条待确认操作：restart_gateway（11-10发起），需要处理吗？",
     ]
+    # 段落间空行：Markdown 渲染（聊天页 / 家庭页）才能正确分段。
 
 
 def test_format_daily_report_only_summary():
@@ -639,3 +643,16 @@ def test_daily_report_mode_persists_three_sections(inspect_home):
     assert anomalies and anomalies[0]["rule"] == rules.RULE_LOW_BATTERY
     assert pending and pending[0]["action"] == "restart_gateway"
     assert persisted_summary == summary
+    # inspect_result 携带结构化提醒与待确认清单：前端卡片直接渲染。
+    inspect_result = result["inspect_result"]
+    assert inspect_result["pending_approvals"][0]["action"] == "restart_gateway"
+    assert any("电量偏低" in reminder for reminder in inspect_result["reminders"])
+
+
+def test_detect_report_type_by_phrasing():
+    """第 9 步话术细分口径：日报关键词升格 daily_report，其余默认纯巡检。"""
+    assert detect_report_type("生成一份家庭报告") == REPORT_TYPE_DAILY
+    assert detect_report_type("给我一份家庭日报") == REPORT_TYPE_DAILY
+    assert detect_report_type("来份家庭简报看看") == REPORT_TYPE_DAILY
+    assert detect_report_type("帮我看看家里设备都正常吗") == REPORT_TYPE_INSPECTION
+    assert detect_report_type("巡检一下所有设备") == REPORT_TYPE_INSPECTION

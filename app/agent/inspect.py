@@ -47,6 +47,10 @@ QUERY_TIMEOUT_SECONDS = 5.0
 REPORT_TYPE_INSPECTION = "inspection"
 REPORT_TYPE_DAILY = "daily_report"
 PENDING_APPROVAL_LIMIT = 10
+
+# 日报话术关键词（确定性细分，零 LLM）：只作用于 inspect 意图内，
+# 不含裸「报告」二字，避免「出个故障报告」类话术误入日报模式。
+DAILY_REPORT_KEYWORDS: tuple[str, ...] = ("日报", "家庭报告", "家庭简报")
 # 日报文案展示固定使用业务时区，避免依赖数据库/应用进程本地时区。
 DISPLAY_TIME_ZONE = ZoneInfo("Asia/Shanghai")
 
@@ -199,6 +203,18 @@ def build_reminders(anomalies: list[dict]) -> list[str]:
     return reminders
 
 
+def detect_report_type(text: str) -> str:
+    """按用户话术确定性细分巡检 / 日报（第 9 步口径，零 LLM）。
+
+    「帮我看看家里设备都正常吗」→ 纯巡检；「生成一份家庭报告 /
+    给我一份家庭日报」→ 日报（含待确认操作与提醒）。未命中关键词
+    一律默认纯巡检，宁可少一节内容也不误升模式。
+    """
+    if any(keyword in text for keyword in DAILY_REPORT_KEYWORDS):
+        return REPORT_TYPE_DAILY
+    return REPORT_TYPE_INSPECTION
+
+
 def format_daily_report(
     summary_text: str, reminders: list[str], pending_approvals: list[dict]
 ) -> str:
@@ -214,7 +230,9 @@ def format_daily_report(
         lines.append(
             f"另有 {len(pending_approvals)} 条待确认操作：{actions}，需要处理吗？"
         )
-    return "\n".join(lines)
+    # 段落间用空行分隔：聊天页按 Markdown 渲染，单个换行会被折叠成
+    # 同一段落（提醒会被粘到最后一条异常的尾巴上）。
+    return "\n\n".join(lines)
 
 
 async def load_pending_approvals(home_id: int) -> list[dict]:
@@ -535,6 +553,9 @@ def build_inspect_graph(
             "total_devices": report.total_devices,
             "normal_count": report.normal_count,
             "anomalies": state["anomalies"],
+            # 结构化三要素（日报模式）：前端巡检卡片直接渲染，不靠文本解析。
+            "reminders": build_reminders(state["anomalies"]),
+            "pending_approvals": state.get("pending_approvals", []),
             "summary_text": state["summary_text"],
         }
         return {

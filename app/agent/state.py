@@ -25,6 +25,8 @@ class AgentState(TypedDict):
     home_context: HomeContext | None
     # Router 判定的意图。
     intent: str
+    # inspect 意图的话术细分：inspection（纯巡检）/ daily_report（家庭日报）。
+    report_type: str
     # 面向用户的最终回复。
     answer: str
     # 诊断子图产出（第 10 步）：审批风险等级与最终诊断结论。
