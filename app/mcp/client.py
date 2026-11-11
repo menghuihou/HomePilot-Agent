@@ -110,4 +110,26 @@ async def get_light_tools() -> list[BaseTool]:
     return await light_mcp_client.ensure_started()
 
 
-__all__ = ["McpToolClient", "get_light_tools", "light_mcp_client"]
+async def fetch_device_status(device_id: int) -> dict:
+    """按业务库主键查询任意设备域的当前状态（get_device_status）。
+
+    巡检子图与诊断子图的共享数据源：id 约定统一为业务库 devices.id，
+    在 MCP 调用参数处转字符串；MCP 侧故障的降级策略（标记查询失败 /
+    本轮不产出证据）由调用方决定，本函数只做结构归一——非 dict 返回
+    统一转为 error 结构，不向外抛。
+    """
+    tools = {tool.name: tool for tool in await get_light_tools()}
+    tool = tools.get("get_device_status")
+    if tool is None:
+        return {"error": "MCP 工具 get_device_status 未注册"}
+    # MCP Server 按业务库 devices.id 查询：直接传库内主键。
+    result = await tool.ainvoke({"device_id": str(device_id)})
+    return result if isinstance(result, dict) else {"error": "MCP 返回结构异常"}
+
+
+__all__ = [
+    "McpToolClient",
+    "fetch_device_status",
+    "get_light_tools",
+    "light_mcp_client",
+]

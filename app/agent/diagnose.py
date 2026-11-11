@@ -37,7 +37,7 @@ from app.agent.state import last_human_message
 from app.config import get_settings
 from app.database import session_factory
 from app.llm_client import build_chat_model, default_model_name
-from app.mcp.client import get_light_tools
+from app.mcp.client import fetch_device_status, get_light_tools
 from app.models import (
     Approval,
     Device,
@@ -196,12 +196,7 @@ async def _query_mcp_device_status(domain: str, device_id: int) -> dict | None:
     if domain != "light":
         return None
     try:
-        tools = {tool.name: tool for tool in await get_light_tools()}
-        tool = tools.get("get_device_status")
-        if tool is None:
-            return None
-        # MCP Server 按业务库 devices.id 查询：直接传库内主键。
-        result = await tool.ainvoke({"device_id": str(device_id)})
+        result = await fetch_device_status(device_id)
     except asyncio.CancelledError as exc:
         # 拆成两个子句：避免依赖 PEP 758 的无括号多异常语法（3.14 专属，
         # 且与 ruff format 的规范化行为冲突）。CancelledError 非 Exception
