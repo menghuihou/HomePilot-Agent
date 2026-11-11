@@ -22,12 +22,15 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AnyMessage
+from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
+from langfuse import get_client, observe
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.agent import anomaly_rules as rules
+from app.agent.wording import apply_wording_filter as _apply_wording_filter
 from app.database import session_factory
 from app.mcp.client import fetch_device_status
 from app.models import Device
@@ -175,20 +178,105 @@ async def _default_summarizer(total: int, normal: int, anomalies: list[dict]) ->
     return format_template_summary(total, normal, anomalies)
 
 
+class InspectSummary(BaseModel):
+    """巡检摘要的结构化输出：单文本字段，与模板结构一致，解析失败视为转写失败。"""
+
+    summary_text: str = Field(description="面向用户的完整中文摘要")
+
+
+def _transcription_covers(anomalies: list[dict], text: str) -> bool:
+    """完整性守卫：每个异常设备名必须出现在转写文本中，防止 LLM 隐瞒异常。
+
+    已知局限（诚实口径）：「新增 / 捏造设备」无法用确定性规则完全识别，
+    由 prompt 约束 + 措辞过滤 + 第 5 周语义评估兜底。
+    """
+    return all(anomaly["device_name"] in text for anomaly in anomalies)
+
+
+@observe(name="summary-fallback")
+def _fallback_summary(
+    reason: str, total: int, normal: int, anomalies: list[dict]
+) -> str:
+    """转写降级：LLM 失败或被完整性守卫拒绝时回落确定性模板（标记进 trace）。"""
+    get_client().update_current_span(metadata={"summary_fallback": reason})
+    return format_template_summary(total, normal, anomalies)
+
+
+def _make_llm_summarizer(model):
+    """构造 LLM 转写器：只许转写输入异常项；隐瞒 / 失败 / 不可用一律模板降级。
+
+    model 需支持 with_structured_output（与诊断子图同一约定）。
+    """
+
+    async def summarize(total: int, normal: int, anomalies: list[dict]) -> str:
+        # 无异常时确定性模板即可：LLM 不介入（零成本 + 测试无 LLM 依赖）。
+        if not anomalies:
+            return format_template_summary(total, normal, anomalies)
+
+        anomaly_lines = "\n".join(
+            f"{index}. [{anomaly['severity']}] {anomaly['device_name']}"
+            f"（{rules.RULE_LABELS.get(anomaly['rule'], anomaly['rule'])}）："
+            f"{anomaly['detail']}"
+            for index, anomaly in enumerate(anomalies, 1)
+        )
+        messages = [
+            SystemMessage(
+                content=(
+                    "你是家庭设备巡检摘要转写器。严格按输入转写：\n"
+                    "1. 只允许转写输入异常列表中的设备与异常项，禁止新增、隐瞒"
+                    "或改判异常数量与严重程度；\n"
+                    "2. 禁止使用「一定」「必然」「已修复」「肯定」等过度断言词；\n"
+                    "3. 中文输出；第一行固定为"
+                    f"「检查了 {total} 台设备：{normal} 台正常，"
+                    f"{total - normal} 台异常。」；\n"
+                    "4. 每条异常保留设备名与建议动作。"
+                )
+            ),
+            HumanMessage(
+                content=(
+                    f"设备总数 {total} 台，正常 {normal} 台。异常列表：\n"
+                    f"{anomaly_lines}\n请转写为面向用户的摘要。"
+                )
+            ),
+        ]
+        try:
+            report = await model.with_structured_output(InspectSummary).ainvoke(
+                messages
+            )
+        except Exception:  # noqa: BLE001 —— LLM 任何故障都降级，巡检能力不受影响
+            return _fallback_summary("llm_error", total, normal, anomalies)
+
+        text = report.summary_text.strip() if report and report.summary_text else ""
+        # 完整性守卫：隐瞒异常（如输入 2 条异常却输出「一切正常」）直接拒绝。
+        if not text or not _transcription_covers(anomalies, text):
+            return _fallback_summary("summary_rejected", total, normal, anomalies)
+        return _apply_wording_filter(text)
+
+    return summarize
+
+
 def build_inspect_graph(
     status_fetcher=None,
     summarizer=None,
+    chat_model=None,
     checkpointer=None,
     timeout_seconds: float = QUERY_TIMEOUT_SECONDS,
 ):
-    """构建巡检子图；status_fetcher / summarizer 供测试注入桩实现。
+    """构建巡检子图；status_fetcher / summarizer / chat_model 供注入与测试。
 
     status_fetcher 签名 async (device) -> dict（get_device_status 结构）；
     summarizer 签名 async (total, normal, anomalies) -> str。
+    转写器解析顺序：显式 summarizer > chat_model 提供时的 LLM 转写器
+    （模板兜底）> 确定性模板。单测不传 chat_model 即零 LLM 依赖。
     checkpointer=None 时子图作为节点挂进主图直接继承主图持久化。
     """
     fetcher = status_fetcher or _mcp_status_fetcher
-    summarize = summarizer or _default_summarizer
+    if summarizer is not None:
+        summarize = summarizer
+    elif chat_model is not None:
+        summarize = _make_llm_summarizer(chat_model)
+    else:
+        summarize = _default_summarizer
 
     async def load_devices(state: InspectState, config) -> dict:
         """按 home_id 一次批量加载设备列表，禁止循环内访问数据库。"""

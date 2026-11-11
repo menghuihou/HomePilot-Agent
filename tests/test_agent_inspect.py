@@ -17,6 +17,8 @@ from app.agent import anomaly_rules as rules
 from app.agent import inspect as inspect_module
 from app.agent.inspect import (
     QUERY_TIMEOUT_SECONDS,
+    InspectSummary,
+    _make_llm_summarizer,
     build_inspect_graph,
     format_template_summary,
     query_all_devices,
@@ -80,6 +82,49 @@ def _anomaly(rule: str, severity: str, device_id: int) -> dict:
         "severity": severity,
         "detail": f"{rule}-{severity}",
     }
+
+
+class StubSummaryModel:
+    """InspectSummary 结构化输出桩；text=None 模拟解析失败，error 模拟调用故障。"""
+
+    def __init__(self, text: str | None = None, error: Exception | None = None):
+        self._text = text
+        self._error = error
+        self.prompts: list[list] = []
+
+    def with_structured_output(self, schema):
+        stub = self
+
+        class _Summary:
+            async def ainvoke(self, messages, config=None):
+                stub.prompts.append(list(messages))
+                if stub._error is not None:
+                    raise stub._error
+                if stub._text is None:
+                    return None
+                return InspectSummary(summary_text=stub._text)
+
+        return _Summary()
+
+
+def _summary_anomalies() -> list[dict]:
+    """两条结构完整的异常（离线超时 + 低电量），供转写器测试复用。"""
+    return [
+        {
+            "device_id": 19,
+            "device_name": "家庭网关",
+            "rule": rules.RULE_OFFLINE_TIMEOUT,
+            "severity": rules.SEVERITY_HIGH,
+            "detail": "家庭网关已离线 3.5 小时（超过阈值 2 小时），建议检查网络或网关",
+        },
+        {
+            "device_id": 2134,
+            "device_name": "客厅温湿度传感器",
+            "rule": rules.RULE_LOW_BATTERY,
+            "severity": rules.SEVERITY_MEDIUM,
+            "detail": "客厅温湿度传感器电量 8%（低于阈值 20%），建议尽快更换电池",
+        },
+    ]
 
 
 def test_query_all_devices_isolates_single_slow_device():
@@ -262,6 +307,104 @@ def test_template_summary_single_anomaly_has_no_distribution_line():
 
 def test_template_summary_all_normal():
     assert format_template_summary(5, 5, []) == "检查了 5 台设备，一切正常。"
+
+
+def test_llm_summarizer_adopts_valid_transcription():
+    """合规转写（覆盖全部异常设备名）直接采用，且 LLM 确实被调用。"""
+    model = StubSummaryModel(
+        "检查了 8 台设备：6 台正常，2 台异常。\n"
+        "家庭网关可能故障，建议检查网络或网关；"
+        "客厅温湿度传感器电量 8%，建议尽快更换电池。"
+    )
+    summarize = _make_llm_summarizer(model)
+
+    text = asyncio.run(summarize(8, 6, _summary_anomalies()))
+
+    assert "家庭网关" in text
+    assert "客厅温湿度传感器" in text
+    assert len(model.prompts) == 1
+
+
+def test_llm_summarizer_rejects_concealment():
+    """第 8 步验收：输入 2 条异常、LLM 称「一切正常」→ 转写被拒，回落模板。"""
+    model = StubSummaryModel("一切正常")
+    summarize = _make_llm_summarizer(model)
+
+    text = asyncio.run(summarize(8, 6, _summary_anomalies()))
+
+    assert text == format_template_summary(8, 6, _summary_anomalies())
+    assert text.startswith("检查了 8 台设备：6 台正常，2 台异常。")
+
+
+def test_llm_summarizer_applies_wording_filter():
+    """第 8 步验收：LLM 输出过度断言词 → 确定性过滤替换。"""
+    model = StubSummaryModel(
+        "检查了 2 台设备：1 台正常，1 台异常。\n家庭网关一定是坏了，建议重启。"
+    )
+    summarize = _make_llm_summarizer(model)
+
+    text = asyncio.run(summarize(2, 1, _summary_anomalies()[:1]))
+
+    assert "一定是" not in text
+    assert "坏了" not in text
+    assert "家庭网关可能是故障" in text
+
+
+def test_llm_summarizer_falls_back_on_llm_error():
+    """LLM 调用故障 → 模板降级，巡检能力不因 LLM 挂而不可用。"""
+    model = StubSummaryModel(error=RuntimeError("LLM API 超时"))
+    summarize = _make_llm_summarizer(model)
+
+    text = asyncio.run(summarize(8, 6, _summary_anomalies()))
+
+    assert text == format_template_summary(8, 6, _summary_anomalies())
+
+
+def test_llm_summarizer_skips_llm_when_no_anomalies():
+    """无异常时确定性模板即可，LLM 不被调用（零成本路径）。"""
+    model = StubSummaryModel("不该被调用")
+    summarize = _make_llm_summarizer(model)
+
+    text = asyncio.run(summarize(5, 5, []))
+
+    assert text == "检查了 5 台设备，一切正常。"
+    assert model.prompts == []
+
+
+def test_inspect_graph_uses_llm_summarizer_when_chat_model_injected(inspect_home):
+    """图级验证：chat_model 注入后 summarize 节点走 LLM 转写路径。"""
+    light_id = _create_device(inspect_home, "客厅灯", "light")
+    sensor_id = _create_device(inspect_home, "客厅温湿度传感器", "sensor")
+    recent = datetime.now(UTC).isoformat()
+    statuses = {
+        light_id: {"online": True, "last_seen_at": recent},
+        sensor_id: {"online": True, "last_seen_at": recent, "battery": 8},
+    }
+
+    async def fetcher(device: dict) -> dict:
+        return dict(statuses[device["id"]])
+
+    model = StubSummaryModel(
+        "检查了 2 台设备：1 台正常，1 台异常。\n"
+        "客厅灯正常在线；客厅温湿度传感器电量 8%，建议尽快更换电池。"
+    )
+    engine = create_async_engine(get_settings().database_url)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(inspect_module, "session_factory", async_sessionmaker(engine))
+
+    async def _run():
+        try:
+            graph = build_inspect_graph(status_fetcher=fetcher, chat_model=model)
+            return await graph.ainvoke({"home_id": inspect_home})
+        finally:
+            await engine.dispose()
+
+    result = asyncio.run(_run())
+
+    # summarize 节点确实调用了 LLM（模板路径不会产生 prompts）。
+    assert len(model.prompts) == 1
+    assert "客厅温湿度传感器" in result["summary_text"]
+    assert light_id > 0
 
 
 def test_inspect_graph_end_to_end_with_stubbed_fetcher(inspect_home):

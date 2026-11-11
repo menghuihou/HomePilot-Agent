@@ -18,9 +18,9 @@ from app.agent.diagnose import (
     FALLBACK_SYMPTOM_KEY,
     DiagnosisReport,
     SymptomSlots,
-    _filter_assertions,
     build_diagnose_graph,
 )
+from app.agent.wording import filter_assertions as _filter_assertions
 from app.config import get_settings
 
 

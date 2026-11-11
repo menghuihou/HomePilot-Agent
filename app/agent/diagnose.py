@@ -34,6 +34,7 @@ from app.agent.hypotheses import (
 )
 from app.agent.risk_rules import judge_risk
 from app.agent.state import last_human_message
+from app.agent.wording import apply_wording_filter as _apply_wording_filter
 from app.config import get_settings
 from app.database import session_factory
 from app.llm_client import build_chat_model, default_model_name
@@ -89,17 +90,6 @@ _REPORT_SYSTEM_PROMPT = """你是诊断报告转写器。给你一份结构化�
 - 措辞使用「可能」「建议检查」「建议观察」等非断言表达，
   禁止出现「一定」「必然」「肯定是」「已修复」等过度断言词；
 - 先说结论，再说依据证据，最后说建议，全文 150 字以内。"""
-
-# 过度断言词的确定性替换表：长词在前，避免子串二次命中。
-ASSERTION_REPLACEMENTS: tuple[tuple[str, str], ...] = (
-    ("一定是", "可能是"),
-    ("肯定是", "可能是"),
-    ("必然是", "可能是"),
-    ("绝对是", "可能是"),
-    ("必然", "可能"),
-    ("已修复", "建议检查"),
-    ("坏了", "故障"),
-)
 
 
 class DiagnoseState(TypedDict):
@@ -478,28 +468,6 @@ def _approval_observation(
         "reason": decision_info.reason,
         "execution_result": execution_result,
     }
-
-
-def _filter_assertions(text: str) -> tuple[str, list[tuple[str, str]]]:
-    """过度断言词确定性替换；返回 (过滤后文本, 替换记录)。"""
-    replaced: list[tuple[str, str]] = []
-    filtered = text
-    for old, new in ASSERTION_REPLACEMENTS:
-        if old in filtered:
-            filtered = filtered.replace(old, new)
-            replaced.append((old, new))
-    return filtered, replaced
-
-
-@observe(name="wording-filter")
-def _apply_wording_filter(text: str) -> str:
-    """措辞过滤观测点：替换事件通过 metadata 进入当前 trace。"""
-    filtered, replacements = _filter_assertions(text)
-    if replacements:
-        get_client().update_current_span(
-            metadata={"assertion_replacements": replacements}
-        )
-    return filtered
 
 
 @observe(name="report-fallback")
