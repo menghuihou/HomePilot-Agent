@@ -23,6 +23,7 @@
 """
 
 import asyncio
+import time
 from datetime import UTC, datetime
 from typing import Annotated, TypedDict
 from zoneinfo import ZoneInfo
@@ -37,6 +38,7 @@ from sqlalchemy import select
 from app.agent import anomaly_rules as rules
 from app.agent.wording import apply_wording_filter as _apply_wording_filter
 from app.database import session_factory
+from app.llm_client import default_model_name
 from app.mcp.client import fetch_device_status
 from app.models import Approval, Device, InspectionReport
 
@@ -277,6 +279,15 @@ class InspectSummary(BaseModel):
     summary_text: str = Field(description="面向用户的完整中文摘要")
 
 
+@observe(as_type="generation", name="inspect-summary-llm")
+async def _invoke_summary(model, messages: list) -> InspectSummary | None:
+    """LLM 转写观测点：generation 类型 + 模型名，trace 里与 chat 回复可区分。"""
+    report = await model.with_structured_output(InspectSummary).ainvoke(messages)
+    # with_structured_output 不回填模型名，Langfuse generation 里手动补上。
+    get_client().update_current_generation(model=default_model_name())
+    return report
+
+
 def _transcription_covers(anomalies: list[dict], text: str) -> bool:
     """完整性守卫：每个异常设备名必须出现在转写文本中，防止 LLM 隐瞒异常。
 
@@ -333,9 +344,7 @@ def _make_llm_summarizer(model):
             ),
         ]
         try:
-            report = await model.with_structured_output(InspectSummary).ainvoke(
-                messages
-            )
+            report = await _invoke_summary(model, messages)
         except Exception:  # noqa: BLE001 —— LLM 任何故障都降级，巡检能力不受影响
             return _fallback_summary("llm_error", total, normal, anomalies)
 
@@ -371,6 +380,7 @@ def build_inspect_graph(
     else:
         summarize = _default_summarizer
 
+    @observe(name="load-devices")
     async def load_devices(state: InspectState, config) -> dict:
         """按 home_id 一次批量加载设备列表，禁止循环内访问数据库。"""
         async with session_factory() as session:
@@ -385,19 +395,37 @@ def build_inspect_graph(
                 .scalars()
                 .all()
             )
-        return {
-            "devices": [
-                {"id": d.id, "name": d.name, "device_type": d.device_type}
-                for d in devices
-            ]
-        }
+        device_dicts = [
+            {"id": d.id, "name": d.name, "device_type": d.device_type} for d in devices
+        ]
+        # 观测点：巡检范围（设备数与名单），排查「漏巡了哪台」从这里看。
+        get_client().update_current_span(
+            metadata={
+                "device_count": len(device_dicts),
+                "device_names": [d["name"] for d in device_dicts],
+            }
+        )
+        return {"devices": device_dicts}
 
+    @observe(name="parallel-query")
     async def parallel_query(state: InspectState, config) -> dict:
+        started = time.perf_counter()
         raw_statuses = await query_all_devices(
             state["devices"], fetcher, timeout_seconds
         )
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        failed = [status_.get("name") for status_ in raw_statuses if "error" in status_]
+        # 观测点：并发耗时与失败明细，排查「为什么慢 / 哪些设备查挂了」。
+        get_client().update_current_span(
+            metadata={
+                "total_devices": len(raw_statuses),
+                "failed_devices": failed,
+                "elapsed_ms": elapsed_ms,
+            }
+        )
         return {"raw_statuses": raw_statuses}
 
+    @observe(name="detect-and-sort")
     async def detect_and_sort(state: InspectState, config) -> dict:
         now = datetime.now(UTC)
         anomalies: list[dict] = []
@@ -418,6 +446,15 @@ def build_inspect_graph(
         anomalies = sort_anomalies(anomalies)
         abnormal_devices = {anomaly["device_id"] for anomaly in anomalies}
         total = len(state["devices"])
+        # 观测点：每条异常的设备 / 规则 / severity——误报漏报排查的核心入口。
+        get_client().update_current_span(
+            metadata={
+                "total_devices": total,
+                "anomaly_count": len(anomalies),
+                "abnormal_device_count": len(abnormal_devices),
+                "anomalies": anomalies,
+            }
+        )
         return {
             "anomalies": anomalies,
             "total_count": total,
@@ -425,12 +462,22 @@ def build_inspect_graph(
             "normal_count": total - len(abnormal_devices),
         }
 
+    @observe(name="inspect-summarize")
     async def summarize_node(state: InspectState, config) -> dict:
         summary = await summarize(
             state["total_count"], state["normal_count"], state["anomalies"]
         )
+        # 观测点：转写产出概览（详细 generation 在 inspect-summary-llm；
+        # 降级时另有 summary-fallback 标记）。
+        get_client().update_current_span(
+            metadata={
+                "anomaly_count": len(state["anomalies"]),
+                "summary_length": len(summary),
+            }
+        )
         return {"summary_text": summary}
 
+    @observe(name="build-report")
     async def build_report(state: InspectState, config) -> dict:
         """日报在巡检结果之上追加「待确认操作 + 提醒」两块，结构由代码拼装。
 
@@ -446,12 +493,20 @@ def build_inspect_graph(
         pending = await load_pending_approvals(state["home_id"])
         reminders = build_reminders(state["anomalies"])
         text = format_daily_report(state["summary_text"] or "", reminders, pending)
+        get_client().update_current_span(
+            metadata={
+                "report_type": REPORT_TYPE_DAILY,
+                "reminder_count": len(reminders),
+                "pending_count": len(pending),
+            }
+        )
         return {
             "report_type": REPORT_TYPE_DAILY,
             "pending_approvals": pending,
             "summary_text": text,
         }
 
+    @observe(name="persist-report")
     async def persist(state: InspectState, config) -> dict:
         """巡检 / 日报落库留档：一次子图执行落一行（重复巡检即两次记录）。"""
         report = InspectionReport(
@@ -468,6 +523,12 @@ def build_inspect_graph(
             await session.commit()
             # refresh 取回自增主键，供调用方追溯。
             await session.refresh(report)
+        get_client().update_current_span(
+            metadata={
+                "report_id": report.id,
+                "report_type": report.report_type,
+            }
+        )
         inspect_result = {
             "report_id": report.id,
             "report_type": report.report_type,
