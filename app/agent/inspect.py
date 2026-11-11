@@ -25,6 +25,7 @@
 import asyncio
 from datetime import UTC, datetime
 from typing import Annotated, TypedDict
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langfuse import get_client, observe
@@ -44,6 +45,8 @@ QUERY_TIMEOUT_SECONDS = 5.0
 REPORT_TYPE_INSPECTION = "inspection"
 REPORT_TYPE_DAILY = "daily_report"
 PENDING_APPROVAL_LIMIT = 10
+# 日报文案展示固定使用业务时区，避免依赖数据库/应用进程本地时区。
+DISPLAY_TIME_ZONE = ZoneInfo("Asia/Shanghai")
 
 # 同 severity 内按规则表固定顺序输出，保证排序结果确定性、测试可精确断言。
 RULE_ORDER: tuple[str, ...] = (
@@ -230,11 +233,14 @@ async def load_pending_approvals(home_id: int) -> list[dict]:
             .scalars()
             .all()
         )
+    # ORM 快照转换放在 session 生命周期内，不依赖列属性未被 expire 的隐式规则。
     return [
         {
             "action": row.action,
             "created_date": (
-                row.created_at.strftime("%m-%d") if row.created_at else ""
+                row.created_at.astimezone(DISPLAY_TIME_ZONE).strftime("%m-%d")
+                if row.created_at
+                else ""
             ),
         }
         for row in rows

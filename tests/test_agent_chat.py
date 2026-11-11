@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.agent.chat as agent_chat
 import app.agent.inspect as inspect_module
-from app.agent.chat import build_agent_graph
+from app.agent.chat import build_agent_graph, build_chat_graph, record_preference
 from app.agent.inspect import build_inspect_graph
 from app.agent.router import RouterDecision, classify_intent
 from app.config import get_settings
@@ -73,6 +73,48 @@ def _tool_call_msg(home_id: int, pref_key: str, pref_value: str) -> AIMessage:
             }
         ],
     )
+
+
+def test_chat_subgraph_does_not_own_memory_checkpointer():
+    """chat 作为主图节点时继承主图持久化，避免进程内历史无界增长。"""
+    assert build_chat_graph().checkpointer is None
+
+
+def test_record_preference_declares_state_injection():
+    """状态注入由元数据声明，且字段不暴露给 LLM 的 tool_call schema。"""
+    assert record_preference.metadata == {"inject_from_state": ("home_id",)}
+    assert "home_id" not in record_preference.tool_call_schema.model_fields
+    assert "home_id" in record_preference.args_schema.model_fields
+
+
+def test_injected_home_id_overrides_model_supplied_value(client, home_id):
+    """手写工具节点执行元数据声明：图状态始终覆盖模型伪造的 home_id。"""
+    result = _run_graph(
+        home_id,
+        "记住我偏好暗色模式",
+        router_intent="chat",
+        chat_responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "record_preference",
+                        "args": {
+                            "pref_key": "theme",
+                            "pref_value": "dark",
+                            "home_id": 999999,
+                        },
+                        "id": "call_1",
+                    }
+                ],
+            ),
+            AIMessage(content="已记录偏好。"),
+        ],
+    )
+
+    prefs = client.get(f"/homes/{home_id}/preferences").json()
+    assert result["answer"] == "已记录偏好。"
+    assert [(p["pref_key"], p["pref_value"]) for p in prefs] == [("theme", "dark")]
 
 
 def _run_graph(

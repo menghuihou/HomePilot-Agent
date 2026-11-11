@@ -1,6 +1,7 @@
 """chat 接口测试：参数校验 422、家庭不存在 404、同步回答与 SSE 事件流。"""
 
 import json
+import logging
 import uuid
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from app.agent.chat import build_agent_graph
+from app.agent.exceptions import HomeNotFoundError
 from app.agent.inspect import build_inspect_graph
 from app.main import application
 from app.routers import chat as chat_api
@@ -160,6 +162,25 @@ def test_chat_direct_reply_home_mode(client, home_id):
     assert body["answer"] == "当前家庭模式是：normal。"
 
 
+def test_agent_home_not_found_translates_to_404(client, home_id):
+    """Agent 领域异常在 API 边界统一翻译为 HTTP 404。"""
+
+    class MissingHomeGraph:
+        async def ainvoke(self, state, config=None):
+            raise HomeNotFoundError("home not found")
+
+    application.dependency_overrides[chat_api.get_agent_graph] = lambda: (
+        MissingHomeGraph()
+    )
+    try:
+        resp = client.post("/chat", json={"home_id": home_id, "message": "你好"})
+    finally:
+        application.dependency_overrides.pop(chat_api.get_agent_graph, None)
+
+    assert resp.status_code == 404
+    assert resp.json()["detail"] == "home not found"
+
+
 def test_chat_multi_turn_accumulates_history(client, home_id):
     """同一 thread_id 连发两轮：第二轮模型收到首轮问答，多轮上下文生效。"""
     chat_model = StubChatModel(
@@ -212,6 +233,43 @@ def test_chat_stream_direct_reply_path(client, home_id):
 
     assert events[-1]["event"] == "done"
     assert events[-1]["answer"] == "当前家庭模式是：normal。"
+
+
+def test_chat_stream_logs_state_fetch_failure(client, home_id, caplog):
+    """最终状态读取失败必须下发 error 并留日志，避免审批事件静默丢失。"""
+
+    class BrokenStateGraph:
+        async def astream_events(self, *args, **kwargs):
+            yield {
+                "event": "on_chat_model_stream",
+                "metadata": {"langgraph_node": "reply"},
+                "data": {"chunk": SimpleNamespace(content="部分回复")},
+            }
+
+        async def aget_state(self, config):
+            raise RuntimeError("数据库抖动")
+
+    application.dependency_overrides[chat_api.get_agent_graph] = lambda: (
+        BrokenStateGraph()
+    )
+    try:
+        with (
+            caplog.at_level(logging.ERROR, logger="app.routers.chat"),
+            client.stream(
+                "POST",
+                "/chat/stream",
+                json={"home_id": home_id, "message": "你好"},
+            ) as response,
+        ):
+            assert response.status_code == 200
+            text = "".join(response.iter_text())
+    finally:
+        application.dependency_overrides.pop(chat_api.get_agent_graph, None)
+
+    events = _parse_sse(text)
+    assert [event["event"] for event in events] == ["meta", "delta", "error", "done"]
+    assert events[-1]["answer"] == "部分回复"
+    assert any("读取最终状态失败" in record.message for record in caplog.records)
 
 
 def test_chat_stream_emits_inspect_events(client, home_id):

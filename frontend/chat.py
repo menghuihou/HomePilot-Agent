@@ -153,12 +153,16 @@ if prompt := st.chat_input("和助手聊聊，例如：把客厅灯叫主灯"):
     if captured.get("inspect_result"):
         # 巡检卡片：异常项展开高亮，正常项计数收纳（异常项高亮 + 正常项折叠）。
         result = captured["inspect_result"]
+        report_label = (
+            f"（报告 #{result.get('report_id')}）"
+            if result.get("report_id") is not None
+            else ""
+        )
         with st.chat_message("assistant"):
             st.info(
                 f"🔍 巡检完成：共 {result.get('total_devices')} 台设备，"
                 f"正常 {result.get('normal_count')} 台，"
-                f"异常 {len(result.get('anomalies', []))} 台"
-                f"（报告 #{result.get('report_id')}）"
+                f"异常 {len(result.get('anomalies', []))} 台{report_label}"
             )
             for anomaly in result.get("anomalies", []):
                 severity = anomaly.get("severity", "medium")

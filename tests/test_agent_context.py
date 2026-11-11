@@ -3,11 +3,11 @@
 import asyncio
 
 import pytest
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.agent.context import DEFAULT_HOME_MODE, HOME_MODE_KEY, resolve_home_context
+from app.agent.exceptions import HomeNotFoundError
 from app.config import get_settings
 from app.models import Home
 from db.seeds.load_family import SEED_HOME_NAME, SEED_ROOMS
@@ -60,12 +60,9 @@ def test_current_mode_defaults_to_normal_when_no_preferences(client, home_id):
     assert context.preferences == []
 
 
-def test_resolve_missing_home_raises_404(db_ready):
-    with pytest.raises(HTTPException) as exc_info:
+def test_resolve_missing_home_raises_domain_error(db_ready):
+    with pytest.raises(HomeNotFoundError, match="home not found"):
         _resolve(999999)
-
-    assert exc_info.value.status_code == 404
-    assert exc_info.value.detail == "home not found"
 
 
 def test_seed_family_context(db_ready):

@@ -16,6 +16,29 @@ def _release_inspect_graph() -> None:
     application.dependency_overrides.pop(inspections_api.get_inspect_graph, None)
 
 
+def test_get_inspect_graph_reuses_singleton(monkeypatch):
+    """默认巡检依赖复用子图与 LLM 客户端，与 chat 单例口径一致。"""
+    original_singleton = inspections_api._inspect_graph_singleton
+    inspections_api._inspect_graph_singleton = None
+    model = object()
+    graph = object()
+    built_models = []
+    monkeypatch.setattr(inspections_api, "build_chat_model", lambda: model)
+
+    def build_inspect_graph(chat_model):
+        built_models.append(chat_model)
+        return graph
+
+    monkeypatch.setattr(inspections_api, "build_inspect_graph", build_inspect_graph)
+    try:
+        assert inspections_api.get_inspect_graph() is graph
+        assert inspections_api.get_inspect_graph() is graph
+    finally:
+        inspections_api._inspect_graph_singleton = original_singleton
+
+    assert built_models == [model]
+
+
 def test_run_inspection_returns_structured_result_and_persists(client, home_id):
     device_id = client.post(
         f"/homes/{home_id}/devices",

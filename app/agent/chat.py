@@ -42,6 +42,10 @@ _CHAT_SYSTEM_PROMPT = """你是家庭智能助手「HomePilot」，用中文口�
 
 logger = logging.getLogger(__name__)
 
+# 工具元数据显式声明哪些参数来自图状态；run_tools 不再通过
+# 参数名猜测注入点，避免 MCP 工具合法自带同名参数时产生歧义。
+_STATE_INJECTION_KEY = "inject_from_state"
+
 
 class ChatState(TypedDict):
     """chat 子图状态：只需消息与家庭上下文。"""
@@ -90,13 +94,22 @@ async def record_preference(
     return await _record_preference(home_id, pref_key, pref_value)
 
 
+# InjectedState 已让 home_id 从 LLM tool_call schema 中排除；元数据
+# 再向手写执行节点声明注入来源，保持状态注入约定显式可见。
+record_preference.metadata = {_STATE_INJECTION_KEY: ("home_id",)}
+
+
 def build_chat_graph(
-    chat_model=None, extra_tools_provider: Callable[[], Awaitable[list]] | None = None
+    chat_model=None,
+    extra_tools_provider: Callable[[], Awaitable[list]] | None = None,
+    checkpointer=None,
 ):
     """构建 chat 子图：reply ⇄ tools 循环，直到模型给出最终回复。
 
     chat_model 供测试注入桩模型；生产路径按需构建真实模型。
     extra_tools_provider 返回动态发现的 MCP 工具（第 6 步），None 表示不挂载。
+    checkpointer=None 时子图作为节点挂进主图直接继承主图持久化，
+    与 diagnose / inspect 子图保持同一生命周期口径。
     """
 
     @observe(as_type="generation", name="chat-reply")
@@ -144,13 +157,8 @@ def build_chat_graph(
                 continue
             try:
                 call_args = dict(call["args"])
-                # ToolNode 会注入 InjectedState 字段；手写节点需自行补齐。
-                # 本周注入字段仅 home_id，来自图状态，模型不可见不可改。
-                if (
-                    "home_id" in selected.args_schema.model_fields
-                    and "home_id" not in call_args
-                ):
-                    call_args["home_id"] = state["home_id"]
+                for field in (selected.metadata or {}).get(_STATE_INJECTION_KEY, ()):
+                    call_args[field] = state[field]
                 result = await selected.ainvoke(call_args)
                 outputs.append(
                     ToolMessage(content=str(result), tool_call_id=call["id"])
@@ -173,7 +181,7 @@ def build_chat_graph(
     builder.add_edge(START, "reply")
     builder.add_conditional_edges("reply", _after_reply, ["tools", END])
     builder.add_edge("tools", "reply")
-    return builder.compile(checkpointer=MemorySaver())
+    return builder.compile(checkpointer=checkpointer)
 
 
 def build_agent_graph(

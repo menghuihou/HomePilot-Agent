@@ -188,10 +188,8 @@ async def _query_mcp_device_status(domain: str, device_id: int) -> dict | None:
     try:
         result = await fetch_device_status(device_id)
     except asyncio.CancelledError as exc:
-        # 拆成两个子句：避免依赖 PEP 758 的无括号多异常语法（3.14 专属，
-        # 且与 ruff format 的规范化行为冲突）。CancelledError 非 Exception
-        # 子类：跨事件循环复用 MCP 客户端时 anyio 会以取消形式报错，
-        # 诊断链路不能被 MCP 故障打断。
+        # 单独捕获 CancelledError：它不是 Exception 子类；MCP 故障
+        # 不能把诊断链路以取消形式打断。
         logger.warning("MCP 设备状态查询失败，本轮不产出证据", exc_info=exc)
         return None
     except Exception:
@@ -595,26 +593,26 @@ def build_diagnose_graph(
                 .all()
             )
             symptom_rows = (await session.execute(select(FaultSymptom))).scalars().all()
+            # 偏好别名（device_alias:{id} = 别名）并入匹配表：
+            # 「主灯」等用户称呼可直接进入诊断，无需 LLM 猜测映射。
+            alias_prefs = (
+                (
+                    await session.execute(
+                        select(Preference).where(
+                            Preference.home_id == state["home_id"],
+                            Preference.pref_key.like("device_alias:%"),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
 
         # 观察点边界统一转纯 dict：ORM 对象进 Langfuse 入参会被序列化成
         # 空 dict，破坏 trace 可读性。
         device_dicts = [
             {"id": d.id, "name": d.name, "device_type": d.device_type} for d in devices
         ]
-        # 偏好别名（device_alias:{id} = 别名）并入匹配表：
-        # 「主灯」等用户称呼可直接进入诊断，无需 LLM 猜测映射。
-        alias_prefs = (
-            (
-                await session.execute(
-                    select(Preference).where(
-                        Preference.home_id == state["home_id"],
-                        Preference.pref_key.like("device_alias:%"),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
         device_by_id = {d.id: d for d in devices}
         for pref in alias_prefs:
             _, _, raw_id = pref.pref_key.partition(":")

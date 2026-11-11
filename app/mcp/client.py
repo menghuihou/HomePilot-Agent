@@ -115,8 +115,8 @@ async def fetch_device_status(device_id: int) -> dict:
 
     巡检子图与诊断子图的共享数据源：id 约定统一为业务库 devices.id，
     在 MCP 调用参数处转字符串；MCP 侧故障的降级策略（标记查询失败 /
-    本轮不产出证据）由调用方决定，本函数只做结构归一——非 dict 返回
-    统一转为 error 结构，不向外抛。
+    本轮不产出证据）由调用方决定。本函数只做结构归一——非 dict 返回
+    统一转为 error 结构；MCP Server 启动失败和工具调用异常都会向外传播。
     """
     tools = {tool.name: tool for tool in await get_light_tools()}
     tool = tools.get("get_device_status")

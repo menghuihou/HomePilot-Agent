@@ -132,6 +132,18 @@ def test_get_device_status_derives_from_latest_event(seeded_home):
     assert status["brightness"] == 80
 
 
+def test_get_device_status_preserves_zero_brightness(seeded_home):
+    """brightness=0 是有效状态，不能被默认值吞掉。"""
+    device_id = _create_device(seeded_home, "客厅灯", "light")
+    _append_sync_event(device_id, "power_on", {"brightness": 80})
+    _append_sync_event(device_id, "power_on", {"brightness": 0})
+
+    status = _call("get_device_status", {"device_id": str(device_id)})
+
+    assert status["online"] is True
+    assert status["brightness"] == 0
+
+
 def test_get_device_status_without_events_is_offline(seeded_home):
     device_id = _create_device(seeded_home, "阳台灯", "light")
 

@@ -175,10 +175,15 @@ if st.button("开始巡检", type="primary"):
         except RuntimeError as exc:
             st.error(f"巡检失败：{exc}")
         else:
+            report_label = (
+                f"（报告 #{result['report_id']}）"
+                if result.get("report_id") is not None
+                else ""
+            )
             st.success(
                 f"巡检完成：共 {result['total_devices']} 台设备，"
                 f"正常 {result['normal_count']} 台，"
-                f"异常 {len(result['anomalies'])} 台（报告 #{result['report_id']}）"
+                f"异常 {len(result['anomalies'])} 台{report_label}"
             )
             st.markdown(result["summary_text"])
             if result["anomalies"]:

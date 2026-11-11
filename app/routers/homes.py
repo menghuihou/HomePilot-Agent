@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.models import Device, Home, Member, Room
+from app.routers.deps import get_home_or_404
 from app.schemas import (
     DeviceCreate,
     DeviceRead,
@@ -42,15 +43,6 @@ async def list_homes(
     return list(result.scalars())
 
 
-async def _get_home_or_404(home_id: int, session: AsyncSession) -> Home:
-    home = await session.get(Home, home_id)
-    if home is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="home not found"
-        )
-    return home
-
-
 @router.post(
     "/homes/{home_id}/rooms",
     response_model=RoomRead,
@@ -62,7 +54,7 @@ async def create_room(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> Room:
     """在指定家庭下创建房间。"""
-    await _get_home_or_404(home_id, session)
+    await get_home_or_404(home_id, session)
     room = Room(**payload.model_dump(), home_id=home_id)
     session.add(room)
     await session.commit()
@@ -75,7 +67,7 @@ async def list_rooms(
     home_id: int, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> list[Room]:
     """列出指定家庭下的房间。"""
-    await _get_home_or_404(home_id, session)
+    await get_home_or_404(home_id, session)
     result = await session.execute(
         select(Room).where(Room.home_id == home_id).order_by(Room.id)
     )
@@ -93,7 +85,7 @@ async def create_member(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> Member:
     """在指定家庭下添加成员。"""
-    await _get_home_or_404(home_id, session)
+    await get_home_or_404(home_id, session)
     member = Member(**payload.model_dump(), home_id=home_id)
     session.add(member)
     await session.commit()
@@ -106,7 +98,7 @@ async def list_members(
     home_id: int, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> list[Member]:
     """列出指定家庭下的成员。"""
-    await _get_home_or_404(home_id, session)
+    await get_home_or_404(home_id, session)
     result = await session.execute(
         select(Member).where(Member.home_id == home_id).order_by(Member.id)
     )
@@ -124,7 +116,7 @@ async def create_device(
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> Device:
     """在指定家庭下创建设备，校验房间归属和设备名唯一。"""
-    await _get_home_or_404(home_id, session)
+    await get_home_or_404(home_id, session)
 
     room_id = payload.room_id
     if room_id is not None:
@@ -164,7 +156,7 @@ async def list_devices(
     home_id: int, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> list[Device]:
     """列出指定家庭下的设备。"""
-    await _get_home_or_404(home_id, session)
+    await get_home_or_404(home_id, session)
     result = await session.execute(
         select(Device).where(Device.home_id == home_id).order_by(Device.id)
     )

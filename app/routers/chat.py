@@ -11,7 +11,7 @@ import logging
 from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 from langfuse import get_client
@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.chat import get_agent_graph as build_dependency_graph
 from app.database import get_session
-from app.models import Home
+from app.routers.deps import get_home_or_404
 
 logger = logging.getLogger(__name__)
 
@@ -90,15 +90,6 @@ def _current_trace_id() -> str:
     return ""
 
 
-async def _get_home_or_404(home_id: int, session: AsyncSession) -> Home:
-    home = await session.get(Home, home_id)
-    if home is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="home not found"
-        )
-    return home
-
-
 def _sse(event: str, payload: dict) -> str:
     """单条 SSE 数据帧：`data: {"event": ..., ...}\\n\\n`。"""
     return (
@@ -113,7 +104,7 @@ async def chat(
     graph: Annotated[Any, Depends(get_agent_graph)],
 ) -> ChatResponse:
     """同步回答：等待完整结果返回（保底可用）。"""
-    await _get_home_or_404(payload.home_id, session)
+    await get_home_or_404(payload.home_id, session)
     thread_id = payload.thread_id or f"web-{uuid4().hex}"
     result = await graph.ainvoke(
         {
@@ -142,7 +133,7 @@ async def chat_stream(
     graph: Annotated[Any, Depends(get_agent_graph)],
 ) -> StreamingResponse:
     """SSE 流式回答：delta 推送回复 token，done 推送最终全文。"""
-    await _get_home_or_404(payload.home_id, session)
+    await get_home_or_404(payload.home_id, session)
     thread_id = payload.thread_id or f"web-{uuid4().hex}"
     trace_id = _current_trace_id()
     config = {"configurable": {"thread_id": thread_id}}
@@ -211,7 +202,10 @@ async def chat_stream(
             # 同步 get_state 会抛错被吞掉，导致审批事件丢失 + 空气泡。
             state = await graph.aget_state(config)
             final_answer = (state.values or {}).get("answer", "") or final_answer
-        except Exception:  # noqa: BLE001
+        except Exception:
+            # 状态读取失败会让审批卡片 / 巡检结果整体缺失；必须留下可排障线索。
+            logger.exception("chat stream 读取最终状态失败，审批/巡检事件可能丢失")
+            yield _sse("error", {"message": "结果状态获取失败，审批或结果卡片可能缺失"})
             final_answer = final_answer or "".join(chunks)
         # 审批挂起：图在 approval_gate 停下等用户决策，下发审批事件供
         # 前端渲染审批卡片（决策走 /approvals/{thread_id}/decision）。

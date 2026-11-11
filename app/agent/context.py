@@ -3,11 +3,11 @@
 本模块只做数据组装，不调用 LLM；Router 与 chat 子图消费这里的产物。
 """
 
-from fastapi import HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent.exceptions import HomeNotFoundError
 from app.models import Device, Home, Member, Preference, Room
 from app.schemas import (
     DeviceRead,
@@ -37,15 +37,13 @@ class HomeContext(BaseModel):
 
 
 async def resolve_home_context(home_id: int, session: AsyncSession) -> HomeContext:
-    """加载指定家庭的完整上下文，家庭不存在时抛 404（沿用项目既有异常风格）。
+    """加载指定家庭的完整上下文；家庭不存在时抛领域异常 HomeNotFoundError。
 
     每类实体一次批量查询，禁止在循环内访问数据库。
     """
     home = await session.get(Home, home_id)
     if home is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="home not found"
-        )
+        raise HomeNotFoundError("home not found")
 
     result = await session.execute(
         select(Room).where(Room.home_id == home_id).order_by(Room.id)

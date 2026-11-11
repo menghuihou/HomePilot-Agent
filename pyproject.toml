@@ -36,3 +36,8 @@ dev = [
 [tool.pytest.ini_options]
 # 让测试进程能从项目根目录导入 app 包。
 pythonpath = ["."]
+# SQLAlchemy 连接生命周期回归立即失败：不允许未归还连接靠 GC 收尾。
+filterwarnings = [
+    "error::sqlalchemy.exc.SAWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]

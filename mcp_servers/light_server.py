@@ -45,7 +45,10 @@ def _parse_device_id(device_id: str) -> int | None:
     """把传入 id 解析为业务库自增主键；不合法返回 None。"""
     try:
         return int(device_id)
-    except TypeError, ValueError:
+    except (
+        TypeError,
+        ValueError,
+    ):
         return None
 
 
@@ -101,8 +104,11 @@ def _status_from_event(device: Device, event: DeviceEvent | None) -> dict:
     }
 
     if device.device_type == "light":
+        brightness = payload.get("brightness")
         status["brightness"] = (
-            0 if event.event_type == "power_off" else payload.get("brightness") or 100
+            0
+            if event.event_type == "power_off"
+            else (brightness if brightness is not None else 100)
         )
     elif device.device_type == "sensor":
         battery = payload.get("battery")

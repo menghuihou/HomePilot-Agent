@@ -1,7 +1,8 @@
 """意图路由器：结构化输出判定意图，非法输出兜底 chat。
 
 Router 只做分类，不回答业务问题；home_mode 直接读上下文回答，
-control / diagnose / inspect 返回占位回复，chat 交给 chat 子图。
+diagnose / inspect 分别进入诊断和巡检子图，control 暂返回占位回复，
+chat 交给 chat 子图。
 """
 
 import logging
@@ -40,7 +41,7 @@ _SYSTEM_PROMPT_TEMPLATE = """你是智能家庭助手的意图路由器，只负
 # Router 上下文窗口：带最近几条消息理解指代与拆句，同时控制 token 上限。
 _CONTEXT_WINDOW = 6
 
-# 后续周次实现的意图先统一返回占位文案，避免提前实现子图。
+# 尚未实现子图的意图返回占位文案，避免在编排层引入临时业务逻辑。
 _UNSUPPORTED_PLACEHOLDERS = {
     "control": "设备控制能力将在后续版本上线。",
 }

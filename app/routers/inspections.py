@@ -17,10 +17,16 @@ from app.models import Home
 
 router = APIRouter(tags=["inspections"])
 
+# 巡检子图与 LLM 客户端构建成本低但可复用：与 chat 主图保持同一单例口径。
+_inspect_graph_singleton: Any | None = None
+
 
 def get_inspect_graph() -> Any:
-    """依赖注入出口：测试用 dependency_overrides 替换为注入桩的子图。"""
-    return build_inspect_graph(chat_model=build_chat_model())
+    """惰性返回巡检子图单例；测试用 dependency_overrides 替换本依赖。"""
+    global _inspect_graph_singleton
+    if _inspect_graph_singleton is None:
+        _inspect_graph_singleton = build_inspect_graph(chat_model=build_chat_model())
+    return _inspect_graph_singleton
 
 
 class InspectionRunRequest(BaseModel):
@@ -29,7 +35,7 @@ class InspectionRunRequest(BaseModel):
 
 
 class InspectionRunResponse(BaseModel):
-    report_id: int
+    report_id: int | None
     report_type: str
     total_devices: int
     normal_count: int
@@ -44,7 +50,7 @@ async def get_inspection_run_response(
     result = await graph.ainvoke({"home_id": home_id, "report_type": report_type})
     inspect_result = result.get("inspect_result") or {}
     return InspectionRunResponse(
-        report_id=inspect_result.get("report_id", 0),
+        report_id=inspect_result.get("report_id"),
         report_type=inspect_result.get("report_type", report_type),
         total_devices=inspect_result.get("total_devices", 0),
         normal_count=inspect_result.get("normal_count", 0),
