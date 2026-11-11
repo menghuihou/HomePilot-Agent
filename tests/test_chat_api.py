@@ -8,6 +8,7 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from app.agent.chat import build_agent_graph
+from app.agent.inspect import build_inspect_graph
 from app.main import application
 from app.routers import chat as chat_api
 from tests.test_agent_chat import StubChatModel, StubRouterModel
@@ -211,3 +212,51 @@ def test_chat_stream_direct_reply_path(client, home_id):
 
     assert events[-1]["event"] == "done"
     assert events[-1]["answer"] == "当前家庭模式是：normal。"
+
+
+def test_chat_stream_emits_inspect_events(client, home_id):
+    """inspect 意图：SSE 流依次出现 inspect_progress 与 inspect_result 事件。"""
+    from datetime import UTC, datetime
+
+    device_id = client.post(
+        f"/homes/{home_id}/devices",
+        json={"name": "客厅灯", "device_type": "light"},
+    ).json()["id"]
+    recent = datetime.now(UTC).isoformat()
+    statuses = {device_id: {"online": True, "last_seen_at": recent}}
+
+    async def fetcher(device: dict) -> dict:
+        return dict(statuses[device["id"]])
+
+    graph = build_agent_graph(
+        router_model=StubRouterModel("inspect"),
+        inspect_graph=build_inspect_graph(status_fetcher=fetcher),
+    )
+    application.dependency_overrides[chat_api.get_agent_graph] = lambda: graph
+    try:
+        with client.stream(
+            "POST",
+            "/chat/stream",
+            json={
+                "home_id": home_id,
+                "message": "帮我看看家里设备都正常吗",
+                "thread_id": f"inspect-{uuid.uuid4().hex[:8]}",
+            },
+        ) as response:
+            assert response.status_code == 200
+            text = "".join(response.iter_text())
+    finally:
+        application.dependency_overrides.pop(chat_api.get_agent_graph, None)
+
+    events = _parse_sse(text)
+    progress_events = [e for e in events if e["event"] == "inspect_progress"]
+    result_events = [e for e in events if e["event"] == "inspect_result"]
+
+    assert len(progress_events) == 1
+    assert "巡检" in progress_events[0]["message"]
+    assert len(result_events) == 1
+    assert result_events[0]["report_id"] > 0
+    assert result_events[0]["total_devices"] == 1
+    done = events[-1]
+    assert done["event"] == "done"
+    assert "检查了 1 台设备" in done["answer"]

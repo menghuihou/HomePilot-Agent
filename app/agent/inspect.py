@@ -26,7 +26,7 @@ import asyncio
 from datetime import UTC, datetime
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
 from langfuse import get_client, observe
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -77,6 +77,8 @@ class InspectState(TypedDict):
     report_type: str
     pending_approvals: list[dict]  # 日报用：生成时刻的待确认审批快照
     report_id: int | None  # 落库后的报告 id（可追溯入口）
+    # 面向调用方（SSE / 接口 / 主图）的结构化巡检结果。
+    inspect_result: dict | None
 
 
 def sort_anomalies(anomalies: list[dict]) -> list[dict]:
@@ -460,7 +462,20 @@ def build_inspect_graph(
             await session.commit()
             # refresh 取回自增主键，供调用方追溯。
             await session.refresh(report)
-        return {"report_id": report.id}
+        inspect_result = {
+            "report_id": report.id,
+            "report_type": report.report_type,
+            "total_devices": report.total_devices,
+            "normal_count": report.normal_count,
+            "anomalies": state["anomalies"],
+            "summary_text": state["summary_text"],
+        }
+        return {
+            "report_id": report.id,
+            "inspect_result": inspect_result,
+            # 摘要追加 AI 消息：挂进主图后由 to_answer 取正文返回。
+            "messages": [AIMessage(content=state["summary_text"] or "")],
+        }
 
     builder = StateGraph(InspectState)
     builder.add_node(load_devices)

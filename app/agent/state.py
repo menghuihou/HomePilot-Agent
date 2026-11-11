@@ -30,3 +30,5 @@ class AgentState(TypedDict):
     # 诊断子图产出（第 10 步）：审批风险等级与最终诊断结论。
     risk_level: str
     final_diagnosis: dict | None
+    # 巡检子图产出（第 4 周）：报告 id、计数与结构化异常列表。
+    inspect_result: dict | None

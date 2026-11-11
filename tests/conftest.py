@@ -72,6 +72,8 @@ def _cleanup_home(home_id: int) -> None:
         )
         cur.execute("DELETE FROM devices WHERE home_id = %s", (home_id,))
         cur.execute("DELETE FROM preferences WHERE home_id = %s", (home_id,))
+        cur.execute("DELETE FROM inspection_reports WHERE home_id = %s", (home_id,))
+        cur.execute("DELETE FROM approvals WHERE home_id = %s", (home_id,))
         cur.execute("DELETE FROM rooms WHERE home_id = %s", (home_id,))
         cur.execute("DELETE FROM members WHERE home_id = %s", (home_id,))
         cur.execute("DELETE FROM homes WHERE id = %s", (home_id,))

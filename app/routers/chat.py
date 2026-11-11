@@ -30,6 +30,16 @@ router = APIRouter(tags=["chat"])
 # astream_events 元数据里用节点名区分 chat 回复与 Router 的模型调用。
 _REPLY_NODE = "reply"
 
+# 巡检子图节点名：任一启动即发一次 inspect_progress（对话式巡检入口）。
+_INSPECT_NODES = {
+    "load_devices",
+    "parallel_query",
+    "detect_and_sort",
+    "summarize_node",
+    "build_report",
+    "persist",
+}
+
 
 class ChatRequest(BaseModel):
     home_id: int
@@ -141,6 +151,7 @@ async def chat_stream(
         yield _sse("meta", {"thread_id": thread_id})
         chunks: list[str] = []
         final_answer = ""
+        inspect_progress_sent = False
         try:
             async for event in graph.astream_events(
                 {
@@ -175,6 +186,15 @@ async def chat_stream(
                     yield _sse("tool_start", {"name": event.get("name", "")})
                 elif kind == "on_tool_end":
                     yield _sse("tool_end", {"name": event.get("name", "")})
+                elif (
+                    kind == "on_chain_start"
+                    and node in _INSPECT_NODES
+                    and not inspect_progress_sent
+                ):
+                    # 巡检是分钟级以下的批量操作：一次进度事件即可，
+                    # 前端渲染「正在巡检」提示（只发一次，避免刷屏）。
+                    inspect_progress_sent = True
+                    yield _sse("inspect_progress", {"message": "正在巡检设备状态…"})
         except HTTPException as exc:
             yield _sse("error", {"message": str(exc.detail), "status": exc.status_code})
             return
@@ -213,6 +233,21 @@ async def chat_stream(
                     )
                 if fired:
                     break
+        # 巡检结果事件：结构化数据供前端渲染巡检卡片（与 approval 同级）。
+        inspect_result = (state.values or {}).get("inspect_result") if state else None
+        if inspect_result:
+            yield _sse(
+                "inspect_result",
+                {
+                    "thread_id": thread_id,
+                    "report_id": inspect_result.get("report_id"),
+                    "report_type": inspect_result.get("report_type"),
+                    "total_devices": inspect_result.get("total_devices"),
+                    "normal_count": inspect_result.get("normal_count"),
+                    "anomalies": inspect_result.get("anomalies", []),
+                    "summary_text": inspect_result.get("summary_text", ""),
+                },
+            )
         yield _sse(
             "done",
             {"answer": final_answer or "".join(chunks), "trace_id": trace_id},

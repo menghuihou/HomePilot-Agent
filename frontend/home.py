@@ -148,3 +148,47 @@ if st.button("触发一次 LLM 调用"):
 if "last_trace_id" in st.session_state:
     st.write("本次 trace id：")
     st.code(st.session_state["last_trace_id"], language=None)
+
+st.subheader("🔍 一键巡检")
+st.caption(
+    "调用后端巡检子图：并发查询设备状态 → 确定性异常检测 → 生成汇总（结果留档可追溯）。"
+)
+report_mode = st.radio(
+    "报告类型",
+    ["inspection", "daily_report"],
+    format_func=lambda v: (
+        "巡检汇总" if v == "inspection" else "家庭日报（含待确认与提醒）"
+    ),
+    horizontal=True,
+)
+if st.button("开始巡检", type="primary"):
+    with st.spinner("正在巡检设备状态…"):
+        try:
+            # 巡检是批量 MCP 调用 + LLM 转写，耗时远超普通接口，放宽超时。
+            result = _api_post(
+                "/inspections/run",
+                {"home_id": home_id, "report_type": report_mode},
+                timeout=180,
+            )
+        except requests.RequestException as exc:
+            st.error(f"巡检失败，请确认 API 服务已启动：{exc}")
+        except RuntimeError as exc:
+            st.error(f"巡检失败：{exc}")
+        else:
+            st.success(
+                f"巡检完成：共 {result['total_devices']} 台设备，"
+                f"正常 {result['normal_count']} 台，"
+                f"异常 {len(result['anomalies'])} 台（报告 #{result['report_id']}）"
+            )
+            st.markdown(result["summary_text"])
+            if result["anomalies"]:
+                with st.expander("异常明细（含设备与规则追溯）"):
+                    for anomaly in result["anomalies"]:
+                        severity = anomaly.get("severity", "medium")
+                        icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(
+                            severity, "🟡"
+                        )
+                        st.markdown(
+                            f"{icon} **{anomaly.get('device_name')}**"
+                            f"（{anomaly.get('rule')} / {severity}）：{anomaly.get('detail')}"
+                        )

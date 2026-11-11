@@ -43,7 +43,6 @@ _CONTEXT_WINDOW = 6
 # 后续周次实现的意图先统一返回占位文案，避免提前实现子图。
 _UNSUPPORTED_PLACEHOLDERS = {
     "control": "设备控制能力将在后续版本上线。",
-    "inspect": "设备巡检能力将在后续版本上线。",
 }
 
 

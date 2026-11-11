@@ -231,8 +231,9 @@ def test_reply_for_home_mode_reads_current_mode():
     assert reply == "当前家庭模式是：sleep。"
 
 
-@pytest.mark.parametrize("intent", ["control", "inspect"])
+@pytest.mark.parametrize("intent", ["control"])
 def test_reply_for_unsupported_intents_are_placeholders(intent):
+    """inspect 已于第 4 周实现子图；未实现的意图（control）仍走占位直答。"""
     reply = reply_for_intent(intent, _make_context())
 
     assert reply is not None

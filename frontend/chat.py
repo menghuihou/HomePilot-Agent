@@ -103,6 +103,11 @@ def _stream_reply(payload: dict, captured: dict):
                     f"⛔ 高风险操作待审批：{event.get('action')}"
                     f"（风险等级：{event.get('risk_level')}）"
                 )
+            elif event["event"] == "inspect_progress":
+                captured["inspect_progress"] = event.get("message", "")
+                yield f"🔍 {event.get('message', '正在巡检设备状态…')}"
+            elif event["event"] == "inspect_result":
+                captured["inspect_result"] = event
             elif event["event"] == "done":
                 captured["answer"] = event.get("answer", "")
                 captured["trace_id"] = event.get("trace_id", "")
@@ -134,7 +139,10 @@ if prompt := st.chat_input("和助手聊聊，例如：把客厅灯叫主灯"):
             or streamed
             or "（本次未生成回复内容，请重试，或查看 Langfuse trace 排查）"
         )
-        if not streamed and final_text:
+        if captured.get("inspect_result"):
+            # 巡检路径：delta 流里只有进度提示，摘要正文在这里补渲染。
+            st.markdown(captured["inspect_result"].get("summary_text", final_text))
+        elif not streamed and final_text:
             st.markdown(final_text)
 
     st.session_state.messages.append({"role": "assistant", "content": final_text})
@@ -142,6 +150,24 @@ if prompt := st.chat_input("和助手聊聊，例如：把客厅灯叫主灯"):
         st.error(captured["error"])
     if captured.get("trace_id"):
         st.caption(f"trace：`{captured['trace_id']}`")
+    if captured.get("inspect_result"):
+        # 巡检卡片：异常项展开高亮，正常项计数收纳（异常项高亮 + 正常项折叠）。
+        result = captured["inspect_result"]
+        with st.chat_message("assistant"):
+            st.info(
+                f"🔍 巡检完成：共 {result.get('total_devices')} 台设备，"
+                f"正常 {result.get('normal_count')} 台，"
+                f"异常 {len(result.get('anomalies', []))} 台"
+                f"（报告 #{result.get('report_id')}）"
+            )
+            for anomaly in result.get("anomalies", []):
+                severity = anomaly.get("severity", "medium")
+                icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(severity, "🟡")
+                st.markdown(
+                    f"{icon} **{anomaly.get('device_name')}**：{anomaly.get('detail')}"
+                )
+            if not result.get("anomalies"):
+                st.success("所有设备运行正常。")
     if captured.get("approval"):
         # 审批卡片在整页刷新后仍需可交互：存入会话状态，下方统一渲染。
         st.session_state.pending_approval = captured["approval"]

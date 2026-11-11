@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from app.agent import chat as chat_module
 from app.config import get_settings
 from app.observability import setup_observability
-from app.routers import approvals, chat, devices, homes, llm, preferences
+from app.routers import approvals, chat, devices, homes, inspections, llm, preferences
 
 settings = get_settings()
 
@@ -40,6 +40,7 @@ application.include_router(preferences.router)
 application.include_router(chat.router)
 application.include_router(llm.router)
 application.include_router(approvals.router)
+application.include_router(inspections.router)
 
 
 @application.get("/health")

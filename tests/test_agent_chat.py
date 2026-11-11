@@ -5,6 +5,7 @@ LLM 全部用桩模型；数据库走真实本地库验证工具落库。
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -12,7 +13,9 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.agent.chat as agent_chat
+import app.agent.inspect as inspect_module
 from app.agent.chat import build_agent_graph
+from app.agent.inspect import build_inspect_graph
 from app.agent.router import RouterDecision, classify_intent
 from app.config import get_settings
 
@@ -72,16 +75,26 @@ def _tool_call_msg(home_id: int, pref_key: str, pref_value: str) -> AIMessage:
     )
 
 
-def _run_graph(home_id: int, text: str, *, router_intent: str, chat_responses=None):
+def _run_graph(
+    home_id: int,
+    text: str,
+    *,
+    router_intent: str,
+    chat_responses=None,
+    inspect_graph=None,
+):
     """用独立引擎运行主图；结束后同循环销毁，避免连接池跨事件循环复用。"""
     engine = create_async_engine(get_settings().database_url)
     session_maker = async_sessionmaker(engine, expire_on_commit=False)
     graph = build_agent_graph(
         router_model=StubRouterModel(router_intent),
         chat_model=StubChatModel(chat_responses) if chat_responses else None,
+        inspect_graph=inspect_graph,
     )
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(agent_chat, "session_factory", session_maker)
+    # 巡检子图有独立的模块级 session_factory，须一并替换（跨事件循环约定）。
+    monkeypatch.setattr(inspect_module, "session_factory", session_maker)
     try:
 
         async def _run():
@@ -186,6 +199,31 @@ def test_placeholder_intent_replies_directly(client, home_id):
     result = _run_graph(home_id, "把灯打开", router_intent="control")
 
     assert "后续版本上线" in result["answer"]
+
+
+def test_inspect_intent_routes_into_inspection_subgraph(client, home_id):
+    """inspect 意图进巡检子图：答案为摘要，inspect_result 携带落库报告 id。"""
+    device_id = client.post(
+        f"/homes/{home_id}/devices",
+        json={"name": "客厅灯", "device_type": "light"},
+    ).json()["id"]
+    recent = datetime.now(UTC).isoformat()
+    statuses = {device_id: {"online": True, "last_seen_at": recent}}
+
+    async def fetcher(device: dict) -> dict:
+        return dict(statuses[device["id"]])
+
+    result = _run_graph(
+        home_id,
+        "帮我看看家里设备都正常吗",
+        router_intent="inspect",
+        inspect_graph=build_inspect_graph(status_fetcher=fetcher),
+    )
+
+    assert result["intent"] == "inspect"
+    assert "检查了 1 台设备" in result["answer"]
+    assert result["inspect_result"]["report_id"] > 0
+    assert result["inspect_result"]["total_devices"] == 1
 
 
 def _stub_home_context() -> SimpleNamespace:

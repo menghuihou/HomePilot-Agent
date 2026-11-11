@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agent.context import HomeContext, resolve_home_context
 from app.agent.diagnose import build_checkpoint_pool, build_diagnose_graph
+from app.agent.inspect import build_inspect_graph
 from app.agent.router import classify_intent, reply_for_intent, summarize_home_context
 from app.agent.state import AgentState
 from app.database import session_factory
@@ -180,6 +181,7 @@ def build_agent_graph(
     chat_model=None,
     extra_tools_provider=None,
     diagnose_graph=None,
+    inspect_graph=None,
     checkpointer=None,
 ):
     """构建 Agent 主图；模型与子图参数仅供测试注入桩实现。
@@ -190,6 +192,8 @@ def build_agent_graph(
     """
     chat_graph = build_chat_graph(chat_model, extra_tools_provider)
     diagnose_graph = diagnose_graph or build_diagnose_graph()
+    # 巡检子图缺省不带自有 checkpointer：继承主图持久化（与 diagnose 同口径）。
+    inspect_graph = inspect_graph or build_inspect_graph()
 
     async def load_context(state: AgentState) -> dict:
         async with session_factory() as session:
@@ -213,6 +217,8 @@ def build_agent_graph(
             return "chat"
         if state["intent"] == "diagnose":
             return "diagnose"
+        if state["intent"] == "inspect":
+            return "inspect"
         return "direct_reply"
 
     def to_answer(state: AgentState) -> dict:
@@ -246,15 +252,17 @@ def build_agent_graph(
     # 编译后的子图直接作为节点：messages / home_context 走共享 channel。
     builder.add_node("chat", chat_graph)
     builder.add_node("diagnose", diagnose_graph)
+    builder.add_node("inspect", inspect_graph)
     builder.add_node("to_answer", to_answer)
     builder.add_node("direct_reply", direct_reply)
     builder.add_edge(START, "load_context")
     builder.add_edge("load_context", "route")
     builder.add_conditional_edges(
-        "route", _dispatch, ["chat", "diagnose", "direct_reply"]
+        "route", _dispatch, ["chat", "diagnose", "inspect", "direct_reply"]
     )
     builder.add_edge("chat", "to_answer")
     builder.add_edge("diagnose", "to_answer")
+    builder.add_edge("inspect", "to_answer")
     builder.add_edge("to_answer", END)
     builder.add_edge("direct_reply", END)
     # 缺省 MemorySaver 保持单测/本地行为不变；生产路径显式传
@@ -283,6 +291,8 @@ async def get_agent_graph():
             extra_tools_provider=get_light_tools,
             # 诊断子图不带自有 checkpointer：继承主图 saver，审批状态同源。
             diagnose_graph=build_diagnose_graph(),
+            # 巡检走同一 LLM 转写能力（模板兜底），checkpointer 继承主图。
+            inspect_graph=build_inspect_graph(chat_model=build_chat_model()),
             checkpointer=saver,
         )
     return _agent_graph_singleton
