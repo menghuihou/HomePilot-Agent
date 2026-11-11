@@ -134,15 +134,35 @@ async def query_all_devices(
 
 
 def format_template_summary(total: int, normal: int, anomalies: list[dict]) -> str:
-    """确定性摘要模板（话术口径对齐总计划功能一）；LLM 不可用时的兜底路径。"""
+    """确定性摘要模板（话术口径对齐总计划功能一）；LLM 不可用时的兜底路径。
+
+    多条异常时按规则合并出「异常分布」行（同类合并展示），逐台明细全部
+    保留（第 7 步口径：合并展示但保留逐台明细）。
+    """
     if not anomalies:
         return f"检查了 {total} 台设备，一切正常。"
     abnormal = total - normal
     lines = [f"检查了 {total} 台设备：{normal} 台正常，{abnormal} 台异常。"]
+    if len(anomalies) > 1:
+        lines.append(f"异常分布：{_rule_distribution(anomalies)}")
     lines.extend(
         f"{index}. {anomaly['detail']}" for index, anomaly in enumerate(anomalies, 1)
     )
     return "\n".join(lines)
+
+
+def _rule_distribution(anomalies: list[dict]) -> str:
+    """按规则合并计数（保持异常项已有顺序），如「离线超时 1 台；低电量 2 台」。
+
+    「X 台」按异常项计数，依赖每设备每规则至多一条的规则表不变量
+    （此时异常项数 == 设备数）；若将来某规则允许单设备多条异常，
+    此处计数口径需同步改为按设备去重。
+    """
+    counts: dict[str, int] = {}
+    for anomaly in anomalies:
+        label = rules.RULE_LABELS.get(anomaly["rule"], anomaly["rule"])
+        counts[label] = counts.get(label, 0) + 1
+    return "；".join(f"{label} {count} 台" for label, count in counts.items())
 
 
 async def _mcp_status_fetcher(device: dict) -> dict:

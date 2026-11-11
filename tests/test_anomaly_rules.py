@@ -166,3 +166,15 @@ def test_naive_datetime_rejected():
     status = _status(last_seen_at=NOW.replace(tzinfo=None).isoformat())
     with pytest.raises(ValueError, match="带时区的 ISO 8601"):
         rules.detect_anomalies(1, "客厅灯", "light", status, NOW)
+
+
+def test_every_rule_has_chinese_label():
+    """规则中文名与规则键一一对应（分布行与 LLM 提示词共用）。"""
+    assert set(rules.RULE_LABELS) == {
+        rules.RULE_LOW_BATTERY,
+        rules.RULE_OFFLINE_TIMEOUT,
+        rules.RULE_OFFLINE_BRIEF,
+        rules.RULE_NEVER_REPORTED,
+        rules.RULE_SENSOR_STALE,
+        rules.RULE_QUERY_FAILED,
+    }

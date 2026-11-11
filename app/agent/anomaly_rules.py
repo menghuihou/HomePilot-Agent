@@ -41,6 +41,16 @@ SEVERITY_HIGH = "high"
 SEVERITY_MEDIUM = "medium"
 SEVERITY_LOW = "low"
 
+# 规则中文名：汇总排序的分布行与 LLM 转写提示词共用，与规则键一一对应。
+RULE_LABELS = {
+    RULE_LOW_BATTERY: "低电量",
+    RULE_OFFLINE_TIMEOUT: "离线超时",
+    RULE_OFFLINE_BRIEF: "离线短暂",
+    RULE_SENSOR_STALE: "数据停滞",
+    RULE_NEVER_REPORTED: "从未上报",
+    RULE_QUERY_FAILED: "查询失败",
+}
+
 
 def _anomaly(device_id: int, name: str, rule: str, severity: str, detail: str) -> dict:
     """构造统一结构的异常项，字段口径与 inspection_reports.anomalies 一致。"""

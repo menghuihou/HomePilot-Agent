@@ -162,6 +162,31 @@ def test_sort_anomalies_severity_then_fixed_rule_order():
     ]
 
 
+def test_sort_plan_mixed_scenario_no_omission():
+    """第 7 步验收场景：1 离线超时 + 2 低电量 + 1 查询失败。
+
+    期望顺序：离线超时（high）→ 低电量×2 → 查询失败（medium 按规则固定序），
+    且四条全部保留无漏项。
+    """
+    anomalies = [
+        _anomaly(rules.RULE_QUERY_FAILED, rules.SEVERITY_MEDIUM, 4),
+        _anomaly(rules.RULE_LOW_BATTERY, rules.SEVERITY_MEDIUM, 2),
+        _anomaly(rules.RULE_OFFLINE_TIMEOUT, rules.SEVERITY_HIGH, 1),
+        _anomaly(rules.RULE_LOW_BATTERY, rules.SEVERITY_MEDIUM, 3),
+    ]
+
+    ordered = sort_anomalies(anomalies)
+
+    assert [a["rule"] for a in ordered] == [
+        rules.RULE_OFFLINE_TIMEOUT,
+        rules.RULE_LOW_BATTERY,
+        rules.RULE_LOW_BATTERY,
+        rules.RULE_QUERY_FAILED,
+    ]
+    # 无漏项：四台设备的异常全部保留，设备 id 可完整追溯。
+    assert {a["device_id"] for a in ordered} == {1, 2, 3, 4}
+
+
 def test_template_summary_with_anomalies():
     anomalies = [
         {
@@ -185,6 +210,54 @@ def test_template_summary_with_anomalies():
     assert text.splitlines()[0] == "检查了 8 台设备：6 台正常，2 台异常。"
     assert "1. 家庭网关已离线 3.5 小时" in text
     assert "2. 客厅温湿度传感器电量 8%" in text
+
+
+def test_template_summary_merges_same_rule_distribution():
+    """同类异常合并展示（分布行）但逐台明细全部保留（第 7 步口径）。"""
+    anomalies = [
+        {
+            "device_id": 19,
+            "device_name": "家庭网关",
+            "rule": rules.RULE_OFFLINE_TIMEOUT,
+            "severity": rules.SEVERITY_HIGH,
+            "detail": "家庭网关已离线 3.5 小时（超过阈值 2 小时），建议检查网络或网关",
+        },
+        {
+            "device_id": 2134,
+            "device_name": "客厅温湿度传感器",
+            "rule": rules.RULE_LOW_BATTERY,
+            "severity": rules.SEVERITY_MEDIUM,
+            "detail": "客厅温湿度传感器电量 8%（低于阈值 20%），建议尽快更换电池",
+        },
+        {
+            "device_id": 2133,
+            "device_name": "走廊灯",
+            "rule": rules.RULE_LOW_BATTERY,
+            "severity": rules.SEVERITY_MEDIUM,
+            "detail": "走廊灯电量 15%（低于阈值 20%），建议尽快更换电池",
+        },
+    ]
+
+    text = format_template_summary(8, 5, anomalies)
+    lines = text.splitlines()
+
+    # 表头 → 同类合并分布行（低电量 2 台合并计数）→ 逐台明细 3 行不缺。
+    assert lines[0] == "检查了 8 台设备：5 台正常，3 台异常。"
+    assert lines[1] == "异常分布：离线超时 1 台；低电量 2 台"
+    detail_lines = [line for line in lines if line[0].isdigit()]
+    assert len(detail_lines) == 3
+    assert "客厅温湿度传感器电量 8%" in text
+    assert "走廊灯电量 15%" in text
+
+
+def test_template_summary_single_anomaly_has_no_distribution_line():
+    """单条异常无需分布行，直接表头 + 明细，摘要保持最短。"""
+    anomalies = [_anomaly(rules.RULE_OFFLINE_BRIEF, rules.SEVERITY_LOW, 1)]
+
+    text = format_template_summary(5, 4, anomalies)
+
+    assert "异常分布" not in text
+    assert text.splitlines()[0] == "检查了 5 台设备：4 台正常，1 台异常。"
 
 
 def test_template_summary_all_normal():
