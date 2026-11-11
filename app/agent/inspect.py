@@ -4,6 +4,7 @@
 接入子图尾部）：
 
     load_devices → parallel_query → detect_and_sort → summarize
+    → build_report → persist
 
 设计要点：
 - 异常检测 / 排序 / 计数全程零 LLM（app/agent/anomaly_rules.py 规则表），
@@ -14,6 +15,9 @@
   gather 严格保序（结果[i] 对应 devices[i]），结果按传入顺序对回设备；
 - 失败设备统一降级为 {"device_id", "name", "error"} 结构，由规则表按
   query_failed 兜底（宁可标记不可漏报）；
+- 日报在巡检结果之上追加「待确认操作 + 提醒」两块，结构由代码拼装
+  （LLM 润色留待后续，结构确定性优先）；
+- 巡检 / 日报结果落 inspection_reports 留档（一次执行落一行，可追溯）；
 - 状态全部 JSON 可序列化类型，复用第 3 周诊断子图踩平的 checkpointer
   序列化口径。
 """
@@ -33,9 +37,13 @@ from app.agent import anomaly_rules as rules
 from app.agent.wording import apply_wording_filter as _apply_wording_filter
 from app.database import session_factory
 from app.mcp.client import fetch_device_status
-from app.models import Device
+from app.models import Approval, Device, InspectionReport
 
 QUERY_TIMEOUT_SECONDS = 5.0
+
+REPORT_TYPE_INSPECTION = "inspection"
+REPORT_TYPE_DAILY = "daily_report"
+PENDING_APPROVAL_LIMIT = 10
 
 # 同 severity 内按规则表固定顺序输出，保证排序结果确定性、测试可精确断言。
 RULE_ORDER: tuple[str, ...] = (
@@ -65,6 +73,10 @@ class InspectState(TypedDict):
     total_count: int
     normal_count: int
     summary_text: str | None
+    # inspection / daily_report，入口按用户话术设置（默认纯巡检）。
+    report_type: str
+    pending_approvals: list[dict]  # 日报用：生成时刻的待确认审批快照
+    report_id: int | None  # 落库后的报告 id（可追溯入口）
 
 
 def sort_anomalies(anomalies: list[dict]) -> list[dict]:
@@ -152,6 +164,79 @@ def format_template_summary(total: int, normal: int, anomalies: list[dict]) -> s
         f"{index}. {anomaly['detail']}" for index, anomaly in enumerate(anomalies, 1)
     )
     return "\n".join(lines)
+
+
+REMINDER_BY_RULE = {
+    rules.RULE_LOW_BATTERY: "电量偏低，需要我提醒你购买电池吗？",
+    rules.RULE_OFFLINE_TIMEOUT: "处于离线状态，需要我尝试重连吗？",
+    rules.RULE_OFFLINE_BRIEF: "当前离线，需要我尝试重连吗？",
+}
+
+
+def build_reminders(anomalies: list[dict]) -> list[str]:
+    """从异常项派生交互式提醒（每设备至多一条，按 severity 排序优先）。
+
+    仅低电量与离线类规则产生「需要我做…吗」式提醒；never_reported /
+    sensor_stale / query_failed 属信息性异常，不产生交互提醒。
+    """
+    reminders: list[str] = []
+    seen_devices: set[int] = set()
+    for anomaly in anomalies:
+        device_id = anomaly["device_id"]
+        if device_id in seen_devices:
+            continue
+        reminder = REMINDER_BY_RULE.get(anomaly["rule"])
+        if reminder:
+            reminders.append(f"{anomaly['device_name']}{reminder}")
+            seen_devices.add(device_id)
+    return reminders
+
+
+def format_daily_report(
+    summary_text: str, reminders: list[str], pending_approvals: list[dict]
+) -> str:
+    """日报文本拼装：巡检汇总 + 提醒清单 + 待确认清单（结构由代码定）。"""
+    lines = [f"家庭日报：{summary_text}"]
+    if reminders:
+        lines.append("提醒：" + "；".join(reminders))
+    if pending_approvals:
+        actions = "；".join(
+            f"{item['action']}（{item['created_date']}发起）"
+            for item in pending_approvals
+        )
+        lines.append(
+            f"另有 {len(pending_approvals)} 条待确认操作：{actions}，需要处理吗？"
+        )
+    return "\n".join(lines)
+
+
+async def load_pending_approvals(home_id: int) -> list[dict]:
+    """待确认审批快照（日报用）：decision 为空的挂起记录，时间升序。"""
+    async with session_factory() as session:
+        rows = (
+            (
+                await session.execute(
+                    select(Approval)
+                    .where(
+                        Approval.home_id == home_id,
+                        Approval.decision.is_(None),
+                    )
+                    .order_by(Approval.created_at)
+                    .limit(PENDING_APPROVAL_LIMIT)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    return [
+        {
+            "action": row.action,
+            "created_date": (
+                row.created_at.strftime("%m-%d") if row.created_at else ""
+            ),
+        }
+        for row in rows
+    ]
 
 
 def _rule_distribution(anomalies: list[dict]) -> str:
@@ -338,14 +423,57 @@ def build_inspect_graph(
         )
         return {"summary_text": summary}
 
+    async def build_report(state: InspectState, config) -> dict:
+        """日报在巡检结果之上追加「待确认操作 + 提醒」两块，结构由代码拼装。
+
+        提醒由异常规则派生（低电量 → 买电池；离线 → 重连），本周不引入
+        独立提醒表；LLM 整体润色留待后续，结构确定性优先。
+        """
+        report_type = state.get("report_type") or REPORT_TYPE_INSPECTION
+        if report_type != REPORT_TYPE_DAILY:
+            return {
+                "report_type": REPORT_TYPE_INSPECTION,
+                "pending_approvals": [],
+            }
+        pending = await load_pending_approvals(state["home_id"])
+        reminders = build_reminders(state["anomalies"])
+        text = format_daily_report(state["summary_text"] or "", reminders, pending)
+        return {
+            "report_type": REPORT_TYPE_DAILY,
+            "pending_approvals": pending,
+            "summary_text": text,
+        }
+
+    async def persist(state: InspectState, config) -> dict:
+        """巡检 / 日报落库留档：一次子图执行落一行（重复巡检即两次记录）。"""
+        report = InspectionReport(
+            home_id=state["home_id"],
+            report_type=state.get("report_type") or REPORT_TYPE_INSPECTION,
+            total_devices=state["total_count"],
+            normal_count=state["normal_count"],
+            anomalies=state["anomalies"],
+            pending_approvals=state.get("pending_approvals", []),
+            summary_text=state["summary_text"],
+        )
+        async with session_factory() as session:
+            session.add(report)
+            await session.commit()
+            # refresh 取回自增主键，供调用方追溯。
+            await session.refresh(report)
+        return {"report_id": report.id}
+
     builder = StateGraph(InspectState)
     builder.add_node(load_devices)
     builder.add_node(parallel_query)
     builder.add_node(detect_and_sort)
     builder.add_node(summarize_node)
+    builder.add_node(build_report)
+    builder.add_node(persist)
     builder.add_edge(START, "load_devices")
     builder.add_edge("load_devices", "parallel_query")
     builder.add_edge("parallel_query", "detect_and_sort")
     builder.add_edge("detect_and_sort", "summarize_node")
-    builder.add_edge("summarize_node", END)
+    builder.add_edge("summarize_node", "build_report")
+    builder.add_edge("build_report", "persist")
+    builder.add_edge("persist", END)
     return builder.compile(checkpointer=checkpointer)

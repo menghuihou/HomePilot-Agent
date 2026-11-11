@@ -17,9 +17,13 @@ from app.agent import anomaly_rules as rules
 from app.agent import inspect as inspect_module
 from app.agent.inspect import (
     QUERY_TIMEOUT_SECONDS,
+    REPORT_TYPE_DAILY,
+    REPORT_TYPE_INSPECTION,
     InspectSummary,
     _make_llm_summarizer,
     build_inspect_graph,
+    build_reminders,
+    format_daily_report,
     format_template_summary,
     query_all_devices,
     sort_anomalies,
@@ -51,6 +55,8 @@ def inspect_home():
         fetch=True,
     )[0][0]
     yield home_id
+    _db_execute("DELETE FROM inspection_reports WHERE home_id = %s", (home_id,))
+    _db_execute("DELETE FROM approvals WHERE home_id = %s", (home_id,))
     _db_execute(
         """
         DELETE FROM device_events
@@ -82,6 +88,62 @@ def _anomaly(rule: str, severity: str, device_id: int) -> dict:
         "severity": severity,
         "detail": f"{rule}-{severity}",
     }
+
+
+def _run_graph(
+    home_id: int,
+    fetcher,
+    report_type: str | None = None,
+    **graph_kwargs,
+) -> dict:
+    """独立引擎运行巡检子图；结束后同循环销毁（跨事件循环约定）。
+
+    report_type 非空时写入初始状态（daily_report 日报模式）；
+    其余 kwargs 透传给 build_inspect_graph（如 chat_model 桩注入）。
+    """
+    engine = create_async_engine(get_settings().database_url)
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(inspect_module, "session_factory", async_sessionmaker(engine))
+
+    async def _run():
+        try:
+            graph = build_inspect_graph(status_fetcher=fetcher, **graph_kwargs)
+            state: dict = {"home_id": home_id}
+            if report_type is not None:
+                state["report_type"] = report_type
+            return await graph.ainvoke(state)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def _create_pending_approval(home_id: int, action: str = "restart_gateway") -> int:
+    """插入一条 pending 审批（decision 为空），供日报待确认清单测试。"""
+    return _db_execute(
+        """
+        INSERT INTO approvals (thread_id, home_id, action, risk_level, decision,
+                               synthetic, source_type)
+        VALUES (%s, %s, %s, 'high', NULL, TRUE, 'test') RETURNING id
+        """,
+        (f"dx-{uuid.uuid4().hex[:8]}", home_id, action),
+        fetch=True,
+    )[0][0]
+
+
+def _latest_report(home_id: int) -> tuple:
+    """取该家庭最新一条巡检报告留档；未落库直接断言失败。"""
+    rows = _db_execute(
+        """
+        SELECT report_type, total_devices, normal_count, anomalies,
+               pending_approvals, summary_text
+        FROM inspection_reports WHERE home_id = %s ORDER BY id DESC LIMIT 1
+        """,
+        (home_id,),
+        fetch=True,
+    )
+    assert rows, "巡检报告未落库"
+    return rows[0]
 
 
 class StubSummaryModel:
@@ -388,18 +450,7 @@ def test_inspect_graph_uses_llm_summarizer_when_chat_model_injected(inspect_home
         "检查了 2 台设备：1 台正常，1 台异常。\n"
         "客厅灯正常在线；客厅温湿度传感器电量 8%，建议尽快更换电池。"
     )
-    engine = create_async_engine(get_settings().database_url)
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(inspect_module, "session_factory", async_sessionmaker(engine))
-
-    async def _run():
-        try:
-            graph = build_inspect_graph(status_fetcher=fetcher, chat_model=model)
-            return await graph.ainvoke({"home_id": inspect_home})
-        finally:
-            await engine.dispose()
-
-    result = asyncio.run(_run())
+    result = _run_graph(inspect_home, fetcher, chat_model=model)
 
     # summarize 节点确实调用了 LLM（模板路径不会产生 prompts）。
     assert len(model.prompts) == 1
@@ -420,18 +471,7 @@ def test_inspect_graph_end_to_end_with_stubbed_fetcher(inspect_home):
     async def fetcher(device: dict) -> dict:
         return dict(statuses[device["id"]])
 
-    engine = create_async_engine(get_settings().database_url)
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(inspect_module, "session_factory", async_sessionmaker(engine))
-
-    async def _run():
-        try:
-            graph = build_inspect_graph(status_fetcher=fetcher)
-            return await graph.ainvoke({"home_id": inspect_home})
-        finally:
-            await engine.dispose()
-
-    result = asyncio.run(_run())
+    result = _run_graph(inspect_home, fetcher)
 
     assert result["total_count"] == 2
     assert result["normal_count"] == 1
@@ -450,18 +490,7 @@ def test_inspect_graph_all_normal_summary(inspect_home):
     async def fetcher(device: dict) -> dict:
         return {"online": True, "last_seen_at": recent}
 
-    engine = create_async_engine(get_settings().database_url)
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(inspect_module, "session_factory", async_sessionmaker(engine))
-
-    async def _run():
-        try:
-            graph = build_inspect_graph(status_fetcher=fetcher)
-            return await graph.ainvoke({"home_id": inspect_home})
-        finally:
-            await engine.dispose()
-
-    result = asyncio.run(_run())
+    result = _run_graph(inspect_home, fetcher)
 
     assert result["anomalies"] == []
     assert result["normal_count"] == 1
@@ -482,18 +511,7 @@ def test_malformed_last_seen_degrades_per_device(inspect_home):
     async def fetcher(device: dict) -> dict:
         return dict(statuses[device["id"]])
 
-    engine = create_async_engine(get_settings().database_url)
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(inspect_module, "session_factory", async_sessionmaker(engine))
-
-    async def _run():
-        try:
-            graph = build_inspect_graph(status_fetcher=fetcher)
-            return await graph.ainvoke({"home_id": inspect_home})
-        finally:
-            await engine.dispose()
-
-    result = asyncio.run(_run())
+    result = _run_graph(inspect_home, fetcher)
 
     assert result["total_count"] == 2
     assert result["normal_count"] == 1
@@ -524,3 +542,100 @@ def test_now_uses_utc_for_detection():
     status = {"online": False, "last_seen_at": (now - timedelta(hours=3)).isoformat()}
     anomalies = rules.detect_anomalies(1, "家庭网关", "gateway", status, now)
     assert anomalies[0]["rule"] == rules.RULE_OFFLINE_TIMEOUT
+
+
+def test_build_reminders_maps_rules_and_dedupes_per_device():
+    """低电量 / 离线派生交互提醒；同设备多条只留一条；信息性规则不提醒。"""
+    anomalies = [
+        _anomaly(rules.RULE_OFFLINE_TIMEOUT, rules.SEVERITY_HIGH, 19),
+        _anomaly(rules.RULE_LOW_BATTERY, rules.SEVERITY_MEDIUM, 2134),
+        # 同设备第二条异常：去重后不再产生第二条提醒
+        _anomaly(rules.RULE_SENSOR_STALE, rules.SEVERITY_MEDIUM, 2134),
+        # 信息性异常不产生「需要我做…吗」式提醒
+        _anomaly(rules.RULE_NEVER_REPORTED, rules.SEVERITY_MEDIUM, 21),
+    ]
+
+    reminders = build_reminders(anomalies)
+
+    assert reminders == [
+        "设备19处于离线状态，需要我尝试重连吗？",
+        "设备2134电量偏低，需要我提醒你购买电池吗？",
+    ]
+
+
+def test_format_daily_report_full_sections():
+    """日报三要素：巡检汇总 + 提醒 + 待确认操作，结构由代码拼装。"""
+    text = format_daily_report(
+        "检查了 8 台设备：6 台正常，2 台异常。",
+        ["客厅温湿度传感器电量偏低，需要我提醒你购买电池吗？"],
+        [{"action": "restart_gateway", "created_date": "11-10"}],
+    )
+
+    assert text.splitlines() == [
+        "家庭日报：检查了 8 台设备：6 台正常，2 台异常。",
+        "提醒：客厅温湿度传感器电量偏低，需要我提醒你购买电池吗？",
+        "另有 1 条待确认操作：restart_gateway（11-10发起），需要处理吗？",
+    ]
+
+
+def test_format_daily_report_only_summary():
+    """无提醒、无待确认时日报只含巡检汇总一段。"""
+    assert (
+        format_daily_report("检查了 5 台设备，一切正常。", [], [])
+        == "家庭日报：检查了 5 台设备，一切正常。"
+    )
+
+
+def test_inspection_mode_persists_report_by_default(inspect_home):
+    """默认纯巡检：落库 report_type=inspection，pending_approvals 为空列表。"""
+    light_id = _create_device(inspect_home, "客厅灯", "light")
+    recent = datetime.now(UTC).isoformat()
+
+    async def fetcher(device: dict) -> dict:
+        return {"online": True, "last_seen_at": recent}
+
+    result = _run_graph(inspect_home, fetcher)
+
+    assert result["report_type"] == REPORT_TYPE_INSPECTION
+    assert isinstance(result["report_id"], int)
+    report_type, total, normal, anomalies, pending, summary = _latest_report(
+        inspect_home
+    )
+    assert report_type == REPORT_TYPE_INSPECTION
+    assert (total, normal) == (1, 1)
+    assert anomalies == []
+    assert pending == []
+    assert "一切正常" in summary
+    assert light_id > 0
+
+
+def test_daily_report_mode_persists_three_sections(inspect_home):
+    """日报模式：汇总 + 提醒 + 待确认三要素齐备，审批快照随报告落库。"""
+    light_id = _create_device(inspect_home, "客厅灯", "light")
+    sensor_id = _create_device(inspect_home, "客厅温湿度传感器", "sensor")
+    _create_pending_approval(inspect_home, "restart_gateway")
+    recent = datetime.now(UTC).isoformat()
+    statuses = {
+        light_id: {"online": True, "last_seen_at": recent},
+        sensor_id: {"online": True, "last_seen_at": recent, "battery": 8},
+    }
+
+    async def fetcher(device: dict) -> dict:
+        return dict(statuses[device["id"]])
+
+    result = _run_graph(inspect_home, fetcher, report_type=REPORT_TYPE_DAILY)
+
+    summary = result["summary_text"]
+    assert summary.startswith("家庭日报：检查了 2 台设备：1 台正常，1 台异常。")
+    assert "提醒：客厅温湿度传感器电量偏低，需要我提醒你购买电池吗？" in summary
+    assert "待确认操作：restart_gateway" in summary
+    assert "需要处理吗？" in summary
+
+    report_type, total, normal, anomalies, pending, persisted_summary = _latest_report(
+        inspect_home
+    )
+    assert report_type == REPORT_TYPE_DAILY
+    assert (total, normal) == (2, 1)
+    assert anomalies and anomalies[0]["rule"] == rules.RULE_LOW_BATTERY
+    assert pending and pending[0]["action"] == "restart_gateway"
+    assert persisted_summary == summary

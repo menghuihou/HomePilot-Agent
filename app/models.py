@@ -301,3 +301,33 @@ class Approval(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class InspectionReport(Base):
+    """巡检 / 家庭日报留档：评估追溯与第 9 周电量趋势预测的数据基础。
+
+    report_type 取值：inspection（纯巡检汇总）/ daily_report（含待确认
+    操作与提醒的三要素日报）。anomalies 存规则表输出的结构化异常列表，
+    转写前后的输入输出都能追溯到设备与规则。
+    """
+
+    __tablename__ = "inspection_reports"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    home_id: Mapped[int] = mapped_column(BigInteger)
+    # inspection / daily_report。
+    report_type: Mapped[str] = mapped_column(String(20), default="inspection")
+    total_devices: Mapped[int] = mapped_column(default=0)
+    normal_count: Mapped[int] = mapped_column(default=0)
+    anomalies: Mapped[list] = mapped_column(JSONB, default=list)
+    # 日报用：生成时刻的待确认审批快照（inspection 类型恒为空列表）。
+    pending_approvals: Mapped[list] = mapped_column(JSONB, default=list)
+    summary_text: Mapped[str | None] = mapped_column(Text)
+    synthetic: Mapped[bool] = mapped_column(default=True)
+    source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
