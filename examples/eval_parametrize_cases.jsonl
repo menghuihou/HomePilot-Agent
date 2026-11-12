@@ -1,0 +1,4 @@
+{"case_id": "risk-001", "action": "power_off_all", "expected_level": "high"}
+{"case_id": "risk-002", "action": "toggle_light", "expected_level": "low"}
+{"case_id": "risk-003", "action": "restart_gateway", "expected_level": "high"}
+{"case_id": "risk-004", "action": "restart_all", "expected_level": "high"}
