@@ -368,6 +368,15 @@ async def _execute_restart_gateway(diagnosis: dict) -> str:
 EXECUTABLE_ACTIONS = frozenset(_ACTION_EXECUTORS)
 
 
+def approval_allows_execution(decision: str | None) -> bool:
+    """审批决策 → 是否执行工具；仅 approved 放行（fail-close 口径）。
+
+    红线接缝：rejected / blocked / 缺失决策一律不执行，评估集据此
+    断言「审批拒绝 → 工具调用数为 0」。决策字段缺失同样视为拒绝。
+    """
+    return decision == "approved"
+
+
 async def default_executor(action: str, diagnosis: dict) -> str:
     """MVP 执行器：查注册表分发；未登记动作如实提示需人工。
 
@@ -798,7 +807,7 @@ def build_diagnose_graph(
             await _record_approval_decision(
                 approval_id, decision, resume_payload.get("reason")
             )
-            if decision == "approved":
+            if approval_allows_execution(decision):
                 execution_result = await executor(action, diagnosis)
             else:
                 execution_result = "未执行"
