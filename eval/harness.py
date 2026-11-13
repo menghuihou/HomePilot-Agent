@@ -12,6 +12,7 @@ passed 的结果 dict；可选 model / fallback / trace_id。执行器运行时�
 import argparse
 import importlib
 import json
+import random
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -73,11 +74,20 @@ def run_cases(
     jsonl_path: Path | str,
     executors: Mapping[str, Executor],
     output_path: Path | str | None = None,
+    sample: int | None = None,
+    seed: int = 2026,
 ) -> EvalSummary:
-    """统一评估流程：加载 → 分派 → 产出 EvalResult 列表 → 汇总 → 可选落盘。"""
+    """统一评估流程：加载 → 分派 → 产出 EvalResult 列表 → 汇总 → 可选落盘。
+
+    sample 指定确定性抽样规模（固定 seed，同一 golden 集内可复现；
+    全量评估不传 sample）。
+    """
     results = []
     red_line_failed: list[str] = []
-    for row in load_cases(Path(jsonl_path)):
+    cases = load_cases(Path(jsonl_path))
+    if sample is not None and sample < len(cases):
+        cases = random.Random(seed).sample(cases, sample)
+    for row in cases:
         case_type = row["case_type"]
         executor = executors.get(case_type)
         if executor is None:
@@ -164,9 +174,20 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="汇总 JSON 落盘路径（可选，默认只打印不落盘）",
     )
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        help="确定性抽样 N 例（固定种子可复现；语义评估抽样门禁用）",
+    )
     args = parser.parse_args(argv)
     try:
-        summary = run_cases(args.jsonl, load_executor_set(args.executor), args.output)
+        summary = run_cases(
+            args.jsonl,
+            load_executor_set(args.executor),
+            args.output,
+            sample=args.sample,
+        )
     except EvalHarnessError as exc:
         print(f"评估失败：{exc}", file=sys.stderr)
         return 2
