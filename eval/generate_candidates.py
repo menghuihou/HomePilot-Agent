@@ -138,7 +138,6 @@ def write_rows(path: Path, rows: list[dict[str, Any]]) -> None:
     )
 
 
-
 async def main_async(force: bool) -> None:
     llm = build_llm()
     for name in SEMANTIC_FILES:
