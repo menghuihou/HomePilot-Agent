@@ -197,6 +197,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if summary.failed_case_ids:
         print(f"失败用例：{'、'.join(summary.failed_case_ids)}")
+        for result in summary.results:
+            if result.passed:
+                continue
+            print(f"  - {result.case_id}: score={result.score} 详情={result.actual}")
     if summary.red_line_failed:
         print(f"红线用例失败（CI 必须阻断）：{'、'.join(summary.red_line_failed)}")
     return 0 if summary.all_passed else 1

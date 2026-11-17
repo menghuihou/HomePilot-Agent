@@ -14,6 +14,7 @@ eval），执行器函数内延迟导入——确定性评估与 pytest 主套�
 import asyncio
 import json
 import os
+from collections.abc import Callable
 from typing import Any
 
 from eval.harness import Executor
@@ -75,6 +76,25 @@ def _judge_error(exc: Exception) -> dict[str, Any]:
     }
 
 
+def _median_resample(
+    run_once: Callable[[], tuple[float, str]],
+    threshold: float,
+    max_extra: int = 2,
+) -> tuple[float, str, list[float]]:
+    """单次 judge 有跨次波动（temperature=0 降低但不消除）：首判低于阈值
+    时补采 max_extra 次取中位数定论（计划十一.3「多次采样取均值/多数」）。
+    首判通过直接采纳，不为通过的用例多花 judge 成本。"""
+    score, reason = run_once()
+    samples = [score]
+    if score < threshold:
+        for _ in range(max_extra):
+            score, reason = run_once()
+            samples.append(score)
+        samples.sort()
+        score = samples[len(samples) // 2]
+    return round(score, 4), reason, samples
+
+
 def _deepeval_judge():
     """DeepEval 自定义模型适配：GLM 端点，关遥测，输出收敛为纯文本。"""
     os.environ.setdefault("DEEPEVAL_TELEMETRY_OPT_OUT", "1")
@@ -124,18 +144,22 @@ def _g_eval(row: dict[str, Any]) -> dict[str, Any]:
             input=_input_text(row),
             actual_output=row["candidate"],
         )
-        # GLM 偶发输出不合 JSON（invalid JSON）：与管线重试口径一致，重试一次。
-        for attempt in (1, 2):
-            try:
-                metric.measure(test_case)
-                break
-            except ValueError as exc:
-                if attempt == 2:
-                    raise
-                print(f"G-Eval 输出格式异常（第 {attempt} 次），重试：{exc}")
-        score = round(float(metric.score or 0.0), 4)
+
+        def run_once() -> tuple[float, str]:
+            # GLM 偶发输出不合 JSON（invalid JSON）：单次采样内重试一次。
+            for attempt in (1, 2):
+                try:
+                    metric.measure(test_case)
+                    break
+                except ValueError as exc:
+                    if attempt == 2:
+                        raise
+                    print(f"G-Eval 输出格式异常（第 {attempt} 次），重试：{exc}")
+            return round(float(metric.score or 0.0), 4), str(metric.reason)
+
+        score, reason, samples = _median_resample(run_once, row["threshold"])
         return {
-            "actual": {"score": score, "reason": metric.reason},
+            "actual": {"score": score, "samples": samples, "reason": reason},
             "score": score,
             "passed": score >= row["threshold"],
             "model": JUDGE_NAME,
@@ -158,10 +182,14 @@ def _faithfulness(row: dict[str, Any]) -> dict[str, Any]:
             response=row["candidate"],
             retrieved_contexts=list(row["input"].get("context", [])),
         )
-        raw_score = asyncio.run(metric.single_turn_ascore(sample))
-        score = round(float(raw_score), 4)
+
+        def run_once() -> tuple[float, str]:
+            raw = asyncio.run(metric.single_turn_ascore(sample))
+            return round(float(raw), 4), "ragas faithfulness 0-1"
+
+        score, reason, samples = _median_resample(run_once, row["threshold"])
         return {
-            "actual": {"score": score, "reason": "ragas faithfulness 0-1"},
+            "actual": {"score": score, "samples": samples, "reason": reason},
             "score": score,
             "passed": score >= row["threshold"],
             "model": JUDGE_NAME,
