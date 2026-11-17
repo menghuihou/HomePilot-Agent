@@ -70,7 +70,10 @@ def _seed_events(now: datetime) -> tuple[tuple[str, str, dict, datetime | None],
         ("客厅温湿度传感器", "battery_low", {"battery": 8}, None),
         ("卧室人体传感器", "heartbeat", {"online": True}, None),
         ("卧室空调", "power_on", {"target_temperature": 26}, None),
-        ("家庭网关", "heartbeat", {"online": True}, None),
+        # 网关心跳刻意回拨 4 小时：必须早于 offline（3 小时前），否则全新
+        # 库首次播种时 heartbeat（入库当前时间）会成为最新事件，网关被
+        # 判在线，离线超时演示异常永远无法命中。
+        ("家庭网关", "heartbeat", {"online": True}, now - timedelta(hours=4)),
         ("家庭网关", "offline", {"online": False}, now - timedelta(hours=3)),
     )
 

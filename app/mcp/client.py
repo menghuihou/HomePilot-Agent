@@ -5,6 +5,7 @@ MCPError，由调用方转成错误信息；重启应用即恢复。
 """
 
 import logging
+import os
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
@@ -53,7 +54,16 @@ class McpToolClient:
         if self._client is not None:
             return self._tools
         self._stack = AsyncExitStack()
-        transport = StdioTransport(self._command, self._args, cwd=str(self._cwd))
+        transport = StdioTransport(
+            self._command,
+            self._args,
+            # MCP SDK 默认只给子进程传最小环境白名单（PATH/HOME 等），
+            # DATABASE_URL/MODEL_* 会丢失：CI 上 server 启动即崩（Connection
+            # closed），本地则静默回退 .env 连到错误库。同机可信子进程，
+            # 显式透传完整父环境。
+            env=dict(os.environ),
+            cwd=str(self._cwd),
+        )
         self._client = await self._stack.enter_async_context(Client(transport))
         mcp_tools = await self._client.list_tools()
         self._tools = [self._convert(tool) for tool in mcp_tools]
