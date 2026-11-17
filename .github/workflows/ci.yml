@@ -1,0 +1,123 @@
+name: CI
+
+# 触发口径（总计划十一.3 / 第五周计划第 7 步）：
+# - push main / PR：test 必跑；PR 额外跑 eval-gate 抽样门禁
+# - 每周一（UTC 02:17，北京 10:17）：test 回归 + eval-full 全量语义评估
+# 注意：CI 拦的是「合并」不是 push——阻断合并需在仓库 Settings →
+# Branches 把 test / eval-gate 设为 required status checks。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 2 * * 1"
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # 每次提交必跑：静态检查 + 全量 pytest（含 21 例确定性红线）。
+    # 不依赖任何 LLM secret——安全红线永不押注在语义评估上（计划 11.3）。
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        # pgvector 预置镜像：当前 schema 未用扩展，但第 7 周 RAG 迁移需要，
+        # 用 drop-in 镜像提前对齐，避免届时改 CI。
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: homepilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d homepilot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/homepilot
+      DATABASE_URL_SYNC: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/homepilot
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: 安装依赖（locked，dev 组，不含 eval 重依赖）
+        run: uv sync --locked
+      - name: 数据库迁移
+        run: uv run alembic upgrade head
+      - name: 静态检查
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: 测试（单元 + 确定性 golden 集）
+        run: uv run pytest -q
+
+  eval-gate:
+    # 每次 PR 抽样 5 例语义评估（质量门禁，不是全量认证——计划 11.3）。
+    # 范围口径：诊断 + 聊天两个集合（26 例池）。审批清晰度基线 2/8
+    # （内部术语问题，改进方向 risk_rules reason 文案用户化），改进完成前
+    # 不入合并门禁——常红门禁会被无视，等价于没装；全量分数由 eval-full
+    # 每周追踪留档。已知边界：diag-sem-002（0.667，转写多写一条建议）约
+    # 4% 概率被抽中致红，属真实质量信号，保留在池内。
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'pull_request'
+    env:
+      ANTHROPIC_AUTH_TOKEN: ${{ secrets.JUDGE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: 安装依赖（locked，eval 组）
+        run: uv sync --locked --group eval
+      - name: 组装抽样池（诊断 + 聊天；审批集基线未达标暂不入闸）
+        run: >
+          cat eval/golden/diagnosis_semantic.jsonl eval/golden/chat_semantic.jsonl
+          > /tmp/gate_pool.jsonl
+      - name: 语义抽样门禁（5 例）
+        run: uv run python -m eval.harness /tmp/gate_pool.jsonl --executor semantic --sample 5
+
+  eval-full:
+    # main 合并后 + 每周一定时：全量语义评估留档（含暂不入闸的审批集），
+    # 作质量改进追踪基线；运行在合并之后，不承担阻断职责。
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    env:
+      ANTHROPIC_AUTH_TOKEN: ${{ secrets.JUDGE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: 安装依赖（locked，eval 组）
+        run: uv sync --locked --group eval
+      - name: 全量语义评估（三个文件，分数落 eval/outputs）
+        run: |
+          uv run python -m eval.harness eval/golden/diagnosis_semantic.jsonl --executor semantic --output eval/outputs/diagnosis_summary.json
+          uv run python -m eval.harness eval/golden/approval_semantic.jsonl --executor semantic --output eval/outputs/approval_summary.json
+          uv run python -m eval.harness eval/golden/chat_semantic.jsonl --executor semantic --output eval/outputs/chat_summary.json
+      - name: 上传评估摘要
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semantic-eval-summaries
+          path: eval/outputs/*.json

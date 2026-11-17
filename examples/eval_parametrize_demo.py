@@ -47,6 +47,7 @@ def load_golden_cases(path: Path) -> list[dict]:
 
 GOLDEN_CASES = load_golden_cases(Path(__file__).parent / "eval_parametrize_cases.jsonl")
 
+
 # 2) 关键一步：模块加载时读一次数据，parametrize 把每行数据变成一个独立测试。
 #    ids 让测试名带 case_id，失败时一眼看到是哪条用例红了。
 @pytest.mark.parametrize(
