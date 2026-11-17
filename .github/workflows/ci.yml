@@ -100,7 +100,9 @@ jobs:
     # main 合并后 + 每周一定时：全量语义评估留档（含暂不入闸的审批集），
     # 作质量改进追踪基线；运行在合并之后，不承担阻断职责。
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 30 分钟实测不够（CI runner 上 judge 每例 1-2 分钟，34 例 + 中位数
+    # 重采样约需 35-40 分钟），超时会把最后一个文件掐掉。
+    timeout-minutes: 60
     if: github.event_name == 'push' || github.event_name == 'schedule'
     env:
       ANTHROPIC_AUTH_TOKEN: ${{ secrets.JUDGE_API_KEY }}
