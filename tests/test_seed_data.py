@@ -25,6 +25,8 @@ SEED_DEVICE_NAMES = (
     "家庭网关",
 )
 SEED_DEVICE_TYPES = {"light", "sensor", "thermostat", "gateway"}
+SEED_POLICY_MODES = ("home", "away", "night", "sleep")
+SEED_AC_DEVICE_NAMES = ("书房空调", "客厅空调")
 
 
 def _load_seed() -> subprocess.CompletedProcess[str]:
@@ -106,6 +108,107 @@ def _latest_event(device_name: str) -> tuple[str, dict | None, datetime]:
         row = cur.fetchone()
     assert row is not None, f"设备 {device_name} 无任何事件"
     return row[0], row[1], row[2]
+
+
+def _load_home_policies() -> subprocess.CompletedProcess[str]:
+    """以子进程方式执行家庭模式种子命令，覆盖文档中的调用路径。"""
+    return subprocess.run(
+        [sys.executable, "-m", "db.seeds.load_home_policies"],
+        capture_output=True,
+        text=True,
+        cwd=PROJECT_ROOT,
+        timeout=60,
+        check=True,
+    )
+
+
+def _fetch_all(query: str, params: tuple = ()) -> list[tuple]:
+    conninfo = get_settings().database_url_sync.replace(
+        "postgresql+psycopg://", "postgresql://", 1
+    )
+    with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
+        cur.execute(query, params)
+        return cur.fetchall()
+
+
+def test_home_policy_seeds_are_idempotent(db_ready) -> None:
+    """4 个 P0 模式策略各自唯一；初始模式历史存在；重跑不再增量。"""
+    _load_home_policies()
+
+    rows = _fetch_all(
+        """
+        SELECT p.mode, p.enabled, p.priority, p.device_rules
+          FROM home_policies p
+          JOIN homes h ON h.id = p.home_id
+        WHERE h.name = '演示之家'
+        ORDER BY p.mode
+        """
+    )
+    assert [row[0] for row in rows] == sorted(SEED_POLICY_MODES), rows
+    assert all(row[1] is True and row[2] == 100 for row in rows), rows
+
+    # away 模式口径：落锁高风险、窗户冲突检查、网关排除。
+    away = next(row for row in rows if row[0] == "away")
+    assert away[3]["lock"]["risk"] == "high", away[3]
+    assert "window_open_blocks_ac_off" in away[3]["conflict_checks"], away[3]
+    assert "家庭网关" in away[3]["exclusions"], away[3]
+
+    # 当前模式：至少一条未结束的 home 模式历史。
+    open_modes = _fetch_all(
+        """
+        SELECT count(*) FROM home_modes m
+          JOIN homes h ON h.id = m.home_id
+        WHERE h.name = '演示之家' AND m.ended_at IS NULL
+        """
+    )
+    assert open_modes[0][0] >= 1
+
+    second = _load_home_policies()
+    assert "跳过" in second.stdout, second.stdout
+
+
+def test_seed_ac_devices_with_energy_events(db_ready) -> None:
+    """2 台空调种子设备各带 7 天 × 4 采样点能耗事件，且重跑幂等。"""
+    _load_home_policies()
+
+    rows = _fetch_all(
+        """
+        SELECT d.id, d.name, d.device_type FROM devices d
+          JOIN homes h ON h.id = d.home_id
+        WHERE h.name = '演示之家' AND d.name = ANY(%s)
+        """,
+        (list(SEED_AC_DEVICE_NAMES),),
+    )
+    assert {row[1] for row in rows} == set(SEED_AC_DEVICE_NAMES), rows
+    assert all(row[2] == "ac" for row in rows), rows
+
+    device_ids = [row[0] for row in rows]
+    events = _fetch_all(
+        """
+        SELECT device_id, payload->>'kwh', occurred_at FROM device_events
+         WHERE device_id = ANY(%s) AND event_type = 'energy_report'
+         ORDER BY occurred_at
+        """,
+        (device_ids,),
+    )
+    # 7 天 × 4 采样点 = 每台 28 条。
+    for device_id in device_ids:
+        samples = [event for event in events if event[0] == device_id]
+        assert len(samples) == 28, (device_id, len(samples))
+        assert all(float(sample[1]) > 0 for sample in samples), samples[:3]
+    # 能耗事件必须全部在过去（第 7 步按日聚合的时间口径）。
+    assert events[-1][2] < datetime.now(UTC), events[-1]
+
+    before = len(events)
+    _load_home_policies()
+    after = _fetch_all(
+        """
+        SELECT count(*) FROM device_events
+         WHERE device_id = ANY(%s) AND event_type = 'energy_report'
+        """,
+        (device_ids,),
+    )
+    assert after[0][0] == before, (before, after[0][0])
 
 
 def test_seed_data_is_idempotent(db_ready) -> None:
