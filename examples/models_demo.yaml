@@ -1,0 +1,16 @@
+# 模型适配层配置示例（第 6 周 spike）。
+# 第 8 步正式版放在 config/models.yaml，由 LLM_MODELS_YAML 环境变量指定路径；
+# 密钥不进 yaml（继续走环境变量 model_api_key / model_base_url）。
+default_role: light
+roles:
+  light: # 路由 / 槽位抽取 / 轻量任务
+    primary:
+      provider: anthropic
+      model: claude-sonnet-4-5
+    fallback:
+      provider: anthropic
+      model: claude-3-5-haiku-latest
+  flagship: # 诊断报告 / 审批说明（第 6 周只占位，不强制接入）
+    primary:
+      provider: anthropic
+      model: claude-sonnet-4-5
