@@ -27,6 +27,11 @@ from langchain_core.messages import HumanMessage
 from app.agent.anomaly_rules import detect_anomalies
 from app.agent.context import HomeContext
 from app.agent.diagnose import approval_allows_execution
+from app.agent.home_mode import (
+    apply_sleep_mute_policy,
+    detect_conflicts,
+    summarize_readback,
+)
 from app.agent.hypotheses import compute_hypotheses, should_conclude, shrink
 from app.agent.inspect import (
     detect_report_type,
@@ -307,6 +312,59 @@ def _inspect_full_coverage(row: dict[str, Any]) -> dict[str, Any]:
     return _judge(asyncio.run(_inspect_full_coverage_async(row)), row["expected"])
 
 
+def _home_mode_conflict(row: dict[str, Any]) -> dict[str, Any]:
+    """断言 #18 离家模式冲突：窗户开着 → 暂停关空调并标记待确认。"""
+    planned, blocked = detect_conflicts(
+        row["input"]["planned"], row["input"]["current_states"], row["input"]["policy"]
+    )
+    actual = {
+        "planned_actions": [action["action"] for action in planned],
+        "blocked": [
+            {
+                "action": item["action"],
+                "device_id": item["device_id"],
+                "reason": item["reason"],
+            }
+            for item in blocked
+        ],
+    }
+    return _judge(actual, row["expected"])
+
+
+def _sleep_mute_policy(row: dict[str, Any]) -> dict[str, Any]:
+    """断言 #19 睡眠静音：媒体不自动播放转待确认，夜灯低亮度保留。"""
+    kept, muted = apply_sleep_mute_policy(
+        row["input"]["planned"], row["input"]["policy"]
+    )
+    actual = {
+        "kept_actions": [action["action"] for action in kept],
+        "muted": [
+            {
+                "action": item["action"],
+                "device_id": item["device_id"],
+                "reason": item["reason"],
+            }
+            for item in muted
+        ],
+    }
+    return _judge(actual, row["expected"])
+
+
+def _mode_readback_summary(row: dict[str, Any]) -> dict[str, Any]:
+    """断言 #20 回读汇总：区分已生效与未生效，缺口如实呈现。"""
+    summary = summarize_readback(
+        row["input"]["planned"], row["input"]["readback_states"]
+    )
+    actual = {
+        "total": summary["total"],
+        "applied_count": len(summary["applied"]),
+        "unresolved_count": len(summary["unresolved"]),
+        "applied_devices": [action["device_id"] for action in summary["applied"]],
+        "unresolved_devices": [item["device_id"] for item in summary["unresolved"]],
+    }
+    return _judge(actual, row["expected"])
+
+
 EXECUTORS: dict[str, Executor] = {
     "risk_rule": _risk_rule,
     "risk_scope_boundary": _risk_scope_boundary,
@@ -323,4 +381,7 @@ EXECUTORS: dict[str, Executor] = {
     "daily_report_elements": _daily_report_elements,
     "mcp_tools_annotation": _mcp_tools_annotation,
     "inspect_full_coverage": _inspect_full_coverage,
+    "home_mode_conflict": _home_mode_conflict,
+    "sleep_mute_policy": _sleep_mute_policy,
+    "mode_readback_summary": _mode_readback_summary,
 }

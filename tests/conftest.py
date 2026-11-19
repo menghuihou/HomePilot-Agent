@@ -14,6 +14,10 @@ from app.config import get_settings
 # Langfuse 实例。必须在导入 app.main 前生效（其导入即挂载插桩）。
 os.environ["LANGFUSE_PUBLIC_KEY"] = ""
 os.environ["LANGFUSE_SECRET_KEY"] = ""
+# SDK 官方禁用开关：即便有代码路径（get_client 兜底等）构造了 langfuse
+# 客户端，tracing_enabled=False 也会切断所有向 Langfuse API 的发送
+# （实测：仅有置空密钥时，进程退出 flush 仍会尝试导出并报 401）。
+os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 
 from app.main import application
 
