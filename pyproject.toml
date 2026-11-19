@@ -41,6 +41,8 @@ eval = [
 [tool.pytest.ini_options]
 # 让测试进程能从项目根目录导入 app 包。
 pythonpath = ["."]
+# 显式保留 pytest-asyncio 当前默认行为；否则插件每次会提示配置缺失。
+asyncio_default_fixture_loop_scope = "function"
 # 评估红线标记（第 5 周）：uv run pytest -m red_line 可单独点名安全边界子集。
 markers = [
     "red_line: 红线用例（安全边界），失败必须阻断合并",
@@ -49,4 +51,8 @@ markers = [
 filterwarnings = [
     "error::sqlalchemy.exc.SAWarning",
     "error::pytest.PytestUnraisableExceptionWarning",
+    # 第三方 tracing SDK 尚未适配 Python 3.14 的 asyncio API 变更；
+    # 只屏蔽该已知提示，项目自身触发的同类警告仍会正常暴露。
+    "ignore:'asyncio\\.iscoroutinefunction' is deprecated:DeprecationWarning:deepeval\\.tracing\\.tracing",
+    "ignore:'asyncio\\.iscoroutinefunction' is deprecated:DeprecationWarning:langsmith",
 ]
