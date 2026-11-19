@@ -341,7 +341,8 @@ class HomePolicy(Base):
     能力模型，因此按设备类型声明）：
     - by_device_type: {设备类型: {目标状态字段: 值, ..., "risk": low/medium/high}}；
     - lock: 家庭级高风险动作（如离家落锁），无锁设备时规则不命中；
-    - exclusions: 不参与迁移的设备名（网关等基础设施）；
+    - exclusions: 不参与迁移的设备名（网关等基础设施）。按名匹配，
+      设备改名 / 移除即失效，由 unmatched_exclusions 提供漂移告警；
     - conflict_checks: 迁移前要做的冲突检查标识，供 detect_conflicts 消费。
     规则里的 risk 仅供展示标注，审批门控唯一依据是 app/agent/risk_rules.py。
     """

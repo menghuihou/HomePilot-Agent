@@ -37,7 +37,8 @@ SEED_AC_DEVICES: tuple[tuple[str, str, str], ...] = (
 )
 
 # 4 个 P0 模式的期望状态规则。exclusions 统一排除网关（基础设施，
-# 模式切换不允许把它关掉）；conflict_checks 的标识由 detect_conflicts
+# 模式切换不允许把它关掉）——按设备名匹配，改名即失效，漂移由
+# unmatched_exclusions 告警；conflict_checks 的标识由 detect_conflicts
 # 的确定性实现消费（第 3 步）。
 SEED_POLICIES: dict[str, dict] = {
     "home": {
