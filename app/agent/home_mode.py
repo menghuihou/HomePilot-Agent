@@ -133,13 +133,13 @@ def _validated_state(state: dict) -> tuple[str, str]:
 
 
 def _graded_action(
-        device_id: str | None,
-        device_name: str,
-        device_type: str,
-        action_id: str,
-        target: dict,
-        policy_risk: Any,
-        scope: dict,
+    device_id: str | None,
+    device_name: str,
+    device_type: str,
+    action_id: str,
+    target: dict,
+    policy_risk: Any,
+    scope: dict,
 ) -> tuple[dict | None, dict | None]:
     """构造动作并做确定性风险分级；范围越界时返回 blocked 条目。
 
@@ -164,7 +164,7 @@ def _graded_action(
 
 
 def plan_mode_transition(
-        policy: dict, current_states: dict[str, dict], scope: dict
+    policy: dict, current_states: dict[str, dict], scope: dict
 ) -> tuple[list[dict], list[dict]]:
     """按策略生成迁移动作并逐条做确定性风险分级。
 
@@ -244,7 +244,7 @@ def unmatched_exclusions(policy: dict, current_states: dict[str, dict]) -> list[
 
 
 def detect_conflicts(
-        planned: list[dict], current_states: dict[str, dict], policy: dict
+    planned: list[dict], current_states: dict[str, dict], policy: dict
 ) -> tuple[list[dict], list[dict]]:
     """冲突检测：离线设备与策略声明的 conflict_checks（当前实现 #18）。
 
@@ -264,10 +264,10 @@ def detect_conflicts(
             blocked.append({**action, "reason": REASON_OFFLINE})
             continue
         if (
-                CONFLICT_WINDOW_AC in checks
-                and window_open
-                and action.get("device_type") == "ac"
-                and action.get("target", {}).get("power") == "off"
+            CONFLICT_WINDOW_AC in checks
+            and window_open
+            and action.get("device_type") == "ac"
+            and action.get("target", {}).get("power") == "off"
         ):
             blocked.append({**action, "reason": REASON_WINDOW_AC})
             continue
@@ -276,7 +276,7 @@ def detect_conflicts(
 
 
 def apply_sleep_mute_policy(
-        planned: list[dict], policy: dict
+    planned: list[dict], policy: dict
 ) -> tuple[list[dict], list[dict]]:
     """睡眠静音策略（#19：媒体设备不自动播放，夜灯允许低亮度开启）。
 
@@ -296,9 +296,9 @@ def apply_sleep_mute_policy(
         name = str(action.get("device_name") or "")
         target = action.get("target", {})
         if (
-                mute_media
-                and action.get("device_type") == MEDIA_DEVICE_TYPE
-                and target.get("power") == "on"
+            mute_media
+            and action.get("device_type") == MEDIA_DEVICE_TYPE
+            and target.get("power") == "on"
         ):
             muted.append({**action, "reason": REASON_MEDIA_MUTED})
             continue

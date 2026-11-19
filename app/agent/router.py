@@ -1,6 +1,6 @@
 """意图路由器：结构化输出判定意图，非法输出兜底 chat。
 
-Router 只做分类，不回答业务问题；home_mode 直接读上下文回答，
+Router 只做分类，不回答业务问题；home_mode 进入模式迁移子图，
 diagnose / inspect 分别进入诊断和巡检子图，control 暂返回占位回复，
 chat 交给 chat 子图。
 """
@@ -25,7 +25,8 @@ _SYSTEM_PROMPT_TEMPLATE = """你是智能家庭助手的意图路由器，只负
 - control：控制设备，例如开关灯、调节温度
 - diagnose：设备故障排查，例如「灯不亮了」
 - inspect：巡检全屋设备状态或索要家庭日报
-- home_mode：询问家庭当前模式
+- home_mode：询问或切换家庭模式（在家 / 离家 / 夜间 / 睡眠），
+  例如「我出门了」「准备睡觉」「现在是什么模式」
 
 易混边界（按现象 vs 动作区分）：
 - 用户【报告故障现象】——不亮、离线、无反应、异响、漏水、状态异常——一律 diagnose，
@@ -160,6 +161,4 @@ async def classify_intent(
 
 def reply_for_intent(intent: str, home_context: HomeContext) -> str | None:
     """非 chat 意图的直接回复；chat 返回 None，交给 chat 子图处理。"""
-    if intent == "home_mode":
-        return f"当前家庭模式是：{home_context.current_mode}。"
     return _UNSUPPORTED_PLACEHOLDERS.get(intent)

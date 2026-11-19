@@ -225,10 +225,9 @@ def test_summarize_home_context_hides_home_mode_key():
     assert "当前模式：sleep" in summary
 
 
-def test_reply_for_home_mode_reads_current_mode():
-    reply = reply_for_intent("home_mode", _make_context())
-
-    assert reply == "当前家庭模式是：sleep。"
+def test_reply_for_home_mode_delegates_to_subgraph():
+    """home_mode 意图第 6 周起进入模式迁移子图，不再直答占位。"""
+    assert reply_for_intent("home_mode", _make_context()) is None
 
 
 @pytest.mark.parametrize("intent", ["control"])

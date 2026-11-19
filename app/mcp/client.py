@@ -114,10 +114,24 @@ light_mcp_client = McpToolClient(
     cwd=BASE_DIR,
 )
 
+# 空调域 Server 单例（第 6 步交付 mcp_servers/ac_server.py）。Server 文件
+# 就位前惰性启动会失败，由调用方按「执行失败」兜底——客户端接线先行，
+# 第 6 步新增 Server 文件即零 Agent 代码接入（可扩展性实证的一部分）。
+ac_mcp_client = McpToolClient(
+    command="uv",
+    args=["run", "python", "mcp_servers/ac_server.py"],
+    cwd=BASE_DIR,
+)
+
 
 async def get_light_tools() -> list[BaseTool]:
     """Agent 惰性初始化入口：首次调用拉起 Server，之后返回缓存工具。"""
     return await light_mcp_client.ensure_started()
+
+
+async def get_ac_tools() -> list[BaseTool]:
+    """空调域工具惰性初始化入口；Server 未交付前抛错由调用方兜底。"""
+    return await ac_mcp_client.ensure_started()
 
 
 async def fetch_device_status(device_id: int) -> dict:
@@ -139,7 +153,9 @@ async def fetch_device_status(device_id: int) -> dict:
 
 __all__ = [
     "McpToolClient",
+    "ac_mcp_client",
     "fetch_device_status",
+    "get_ac_tools",
     "get_light_tools",
     "light_mcp_client",
 ]

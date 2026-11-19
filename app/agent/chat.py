@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agent.context import HomeContext, resolve_home_context
 from app.agent.diagnose import build_checkpoint_pool, build_diagnose_graph
+from app.agent.home_mode_graph import build_home_mode_graph
 from app.agent.inspect import build_inspect_graph, detect_report_type
 from app.agent.router import classify_intent, reply_for_intent, summarize_home_context
 from app.agent.state import AgentState, last_human_message
@@ -190,6 +191,7 @@ def build_agent_graph(
     extra_tools_provider=None,
     diagnose_graph=None,
     inspect_graph=None,
+    home_mode_graph=None,
     checkpointer=None,
 ):
     """构建 Agent 主图；模型与子图参数仅供测试注入桩实现。
@@ -202,6 +204,9 @@ def build_agent_graph(
     diagnose_graph = diagnose_graph or build_diagnose_graph()
     # 巡检子图缺省不带自有 checkpointer：继承主图持久化（与 diagnose 同口径）。
     inspect_graph = inspect_graph or build_inspect_graph()
+    # 家庭模式子图同口径：继承主图 checkpointer，高风险迁移 interrupt 由
+    # 主图统一持久化（approvals API 跨进程恢复）。
+    home_mode_graph = home_mode_graph or build_home_mode_graph(chat_model=chat_model)
 
     async def load_context(state: AgentState) -> dict:
         async with session_factory() as session:
@@ -236,6 +241,8 @@ def build_agent_graph(
             return "diagnose"
         if state["intent"] == "inspect":
             return "inspect"
+        if state["intent"] == "home_mode":
+            return "home_mode"
         return "direct_reply"
 
     def to_answer(state: AgentState) -> dict:
@@ -270,16 +277,18 @@ def build_agent_graph(
     builder.add_node("chat", chat_graph)
     builder.add_node("diagnose", diagnose_graph)
     builder.add_node("inspect", inspect_graph)
+    builder.add_node("home_mode", home_mode_graph)
     builder.add_node("to_answer", to_answer)
     builder.add_node("direct_reply", direct_reply)
     builder.add_edge(START, "load_context")
     builder.add_edge("load_context", "route")
     builder.add_conditional_edges(
-        "route", _dispatch, ["chat", "diagnose", "inspect", "direct_reply"]
+        "route", _dispatch, ["chat", "diagnose", "inspect", "home_mode", "direct_reply"]
     )
     builder.add_edge("chat", "to_answer")
     builder.add_edge("diagnose", "to_answer")
     builder.add_edge("inspect", "to_answer")
+    builder.add_edge("home_mode", "to_answer")
     builder.add_edge("to_answer", END)
     builder.add_edge("direct_reply", END)
     # 缺省 MemorySaver 保持单测/本地行为不变；生产路径显式传

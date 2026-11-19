@@ -4,7 +4,9 @@
 - 资源服务名取 OTEL_SERVICE_NAME，Langfuse 中按此名称展示服务；
 - 导出器把 span 通过 OTLP HTTP 发送到 Langfuse 自托管实例；
 - FastAPIInstrumentor 产生带请求路径的服务端 span；
-- LLM 路由里的 @observe(as_type="generation") 与服务端 span 同属一条 trace。
+- langgraph 节点内的 langfuse @observe 会脱离请求 OTel 上下文、生成
+  独立根 trace（2026-11-19 实证）；需要在请求 trace 树内串联的节点
+  级观测用 OTel span（见 home_mode_graph._traced）。
 """
 
 import base64
