@@ -177,6 +177,25 @@ def _render_summary(summary: dict) -> str:
     return "".join(lines)
 
 
+def _render_blocked_reply(blocked: list[dict]) -> str:
+    """全部动作被拦时的确定性回复：按原因分组、逐台列出设备。
+
+    只报数量会让用户无法判断「待确认的到底是什么」；reason 文案本身
+    是确定性契约（golden 钉住），这里原样透传不二次加工。
+    """
+    by_reason: dict[str, list[str]] = {}
+    for item in blocked:
+        name = str(item.get("device_name") or item.get("device_id") or "未知设备")
+        reason = str(item.get("reason") or "原因未知")
+        by_reason.setdefault(reason, []).append(name)
+    details = "；".join(
+        f"{'、'.join(names)}（{reason}）" for reason, names in by_reason.items()
+    )
+    return (
+        f"本次迁移有 {len(blocked)} 项被暂停待确认：{details}。暂无可自动执行的动作。"
+    )
+
+
 async def _default_summarizer(summary: dict, chat_model=None) -> str:
     """默认摘要转写：LLM 转写，异常向上抛由调用方降级模板。"""
     model = chat_model or build_chat_model()
@@ -390,10 +409,7 @@ def build_home_mode_graph(
         if not planned:
             # 无可执行动作：冲突 / 离线 / 静音全拦，或全部已达标（幂等）。
             if blocked:
-                updates["mode_reply"] = (
-                    f"本次迁移有 {len(blocked)} 项被暂停待确认（冲突 / 离线 / 静音），"
-                    "暂无可自动执行的动作。"
-                )
+                updates["mode_reply"] = _render_blocked_reply(blocked)
             else:
                 updates["mode_reply"] = "所有设备都已处于目标状态，无需调整。"
         return updates
