@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["approvals"])
 
 
+def _resumed_report(result: dict) -> str | None:
+    """恢复运行的对外报告：优先子图最终 answer。
+
+    diagnose 的报告与 home_mode 的迁移摘要都写入 answer（to_answer 取
+    最后一条 AI 消息）；final_diagnosis.report 仅作旧口径兜底。
+    """
+    return result.get("answer") or (result.get("final_diagnosis") or {}).get("report")
+
+
 @router.post(
     "/approvals/{thread_id}/decision",
     response_model=ApprovalDecisionResponse,
@@ -76,11 +85,10 @@ async def decide_approval(
     graph = await get_agent_graph()
     config = {"configurable": {"thread_id": thread_id}}
     result = await graph.ainvoke(Command(resume=body.model_dump()), config=config)
-    diagnosis = result.get("final_diagnosis") or {}
     logger.info("审批决策完成：thread=%s decision=%s", thread_id, body.decision)
     return ApprovalDecisionResponse(
         thread_id=thread_id,
         decision=body.decision,
         status="resumed",
-        report=diagnosis.get("report"),
+        report=_resumed_report(result),
     )

@@ -448,3 +448,19 @@ def test_agent_graph_routes_diagnose_and_resumes(client, home_id):
     finally:
         monkeypatch.undo()
         _cleanup_approvals(thread_id)
+
+
+def test_resumed_report_prefers_answer_over_diagnosis_report():
+    """恢复报告取子图最终 answer：home_mode 迁移摘要与 diagnose 报告同口径。"""
+    # home_mode 子图：迁移摘要存 answer，final_diagnosis 为空。
+    assert (
+        approvals_router._resumed_report({"answer": "已切换到「离家」模式"})
+        == "已切换到「离家」模式"
+    )
+    # diagnose 子图：报告存 final_diagnosis.report（旧口径兜底）。
+    assert (
+        approvals_router._resumed_report({"final_diagnosis": {"report": "诊断报告"}})
+        == "诊断报告"
+    )
+    # 两者皆缺：None 交由前端兜底文案。
+    assert approvals_router._resumed_report({}) is None

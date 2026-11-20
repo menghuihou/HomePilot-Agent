@@ -23,8 +23,11 @@ from app.agent.chat import build_agent_graph
 from app.agent.home_mode import REASON_MEDIA_MUTED, REASON_OFFLINE
 from app.agent.home_mode_graph import build_home_mode_graph
 from app.config import BASE_DIR, get_settings
+from app.main import application
 from app.mcp.client import McpToolClient
+from app.routers import chat as chat_api
 from tests.test_agent_chat import StubChatModel, StubRouterModel
+from tests.test_chat_api import _parse_sse
 
 
 def _conninfo() -> str:
@@ -471,6 +474,33 @@ def test_away_blocks_ac_action_when_ac_domain_unavailable(client, home_id):
             _cleanup_approvals(thread_id)
 
 
+def test_all_blocked_reply_lists_devices_and_reasons(client, home_id):
+    """全部动作被拦：回复按原因分组逐台列出设备，不再只报数量。"""
+    ac_id = _create_device(client, home_id, "客厅空调", "ac")
+    _append_event(ac_id, "energy_report", {"kwh": 1.0})
+    _seed_policy(
+        home_id,
+        "away",
+        {
+            "by_device_type": {"ac": {"power": "off", "risk": "medium"}},
+            "exclusions": [],
+            "conflict_checks": [],
+        },
+    )
+    thread_id = None
+    try:
+        result, _, thread_id = _run_home_mode(home_id, "我出门了")
+    finally:
+        if thread_id:
+            _cleanup_approvals(thread_id)
+
+    # ac 域 Server 未交付 → 状态不可查 → 离线兜底 → 全部待确认。
+    assert result["answer"] == (
+        "本次迁移有 1 项被暂停待确认：客厅空调"
+        "（设备离线，暂停执行，标记待确认）。暂无可自动执行的动作。"
+    )
+
+
 def test_main_graph_routes_home_mode_into_subgraph(client, home_id):
     """主图挂载验证：home_mode 意图经条件边进入子图（查询路径零 LLM）。"""
     engine = create_async_engine(get_settings().database_url)
@@ -505,3 +535,66 @@ def test_main_graph_routes_home_mode_into_subgraph(client, home_id):
 
     assert result["intent"] == "home_mode"
     assert result["answer"] == "当前家庭模式是：normal。"
+
+
+def test_stream_interrupt_done_answer_not_stale(client, home_id):
+    """回归：挂起时 done.answer 不得回读线程旧值。
+
+    复现路径（用户实测）：同线程先问「当前模式」，再发「我出门了」——
+    gate 挂起后 done 事件曾把上一轮查询回复冒充本轮结果。
+    """
+    device_id = _create_device(client, home_id, "客厅灯", "light")
+    _append_event(device_id, "power_on", {"brightness": 80})
+    _seed_policy(
+        home_id,
+        "away",
+        {
+            "by_device_type": {"light": {"power": "off", "risk": "low"}},
+            "lock": {"target": "locked", "risk": "high"},
+            "exclusions": [],
+            "conflict_checks": [],
+        },
+    )
+    calls: list = []
+    graph = build_agent_graph(
+        router_model=StubRouterModel("home_mode"),
+        chat_model=StubChatModel([]),
+        home_mode_graph=build_home_mode_graph(
+            summarizer=_fake_summarizer("迁移完成（测试摘要）。"),
+            executor=_stub_executor(calls),
+            checkpointer=MemorySaver(),
+        ),
+    )
+    application.dependency_overrides[chat_api.get_agent_graph] = lambda: graph
+    thread_id = f"hm-stream-{uuid.uuid4().hex[:8]}"
+    try:
+        # 第一轮：同线程先查询，在线程状态里留下旧 answer。
+        with client.stream(
+            "POST",
+            "/chat/stream",
+            json={
+                "home_id": home_id,
+                "message": "现在是什么模式",
+                "thread_id": thread_id,
+            },
+        ) as response:
+            assert response.status_code == 200
+            first = _parse_sse("".join(response.iter_text()))
+        assert first[-1]["answer"] == "当前家庭模式是：normal。"
+
+        # 第二轮：同线程触发迁移 → gate 挂起 → done.answer 必须为空。
+        with client.stream(
+            "POST",
+            "/chat/stream",
+            json={"home_id": home_id, "message": "我出门了", "thread_id": thread_id},
+        ) as response:
+            assert response.status_code == 200
+            second = _parse_sse("".join(response.iter_text()))
+    finally:
+        application.dependency_overrides.pop(chat_api.get_agent_graph, None)
+        _cleanup_approvals(thread_id)
+
+    approval = [e for e in second if e["event"] == "approval_required"]
+    done = [e for e in second if e["event"] == "done"]
+    assert approval and approval[0]["action"] == "lock_door"
+    assert done and done[0]["answer"] == "", done
