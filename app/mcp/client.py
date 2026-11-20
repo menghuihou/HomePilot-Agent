@@ -22,12 +22,28 @@ logger = logging.getLogger(__name__)
 _JSON_TYPE_MAP = {"string": str, "integer": int, "number": float, "boolean": bool}
 
 
+def _resolve_py_type(spec: dict) -> type:
+    """JSON Schema 属性 → Python 类型。
+
+    可选参数的 anyOf 形态（如 int | null → [{"type": "integer"},
+    {"type": "null"}]）取首个非 null 类型；无法识别的兜底 str，交给
+    pydantic 校验给出明确错误。
+    """
+    if "anyOf" in spec:
+        for sub_spec in spec["anyOf"]:
+            sub_type = sub_spec.get("type") if isinstance(sub_spec, dict) else None
+            if sub_type and sub_type != "null":
+                return _JSON_TYPE_MAP.get(sub_type, str)
+        return str
+    return _JSON_TYPE_MAP.get(spec.get("type", "string"), str)
+
+
 def _schema_to_args_model(tool_name: str, schema: dict) -> type[BaseModel]:
     """把 MCP inputSchema（JSON Schema 常用子集）转成动态 Pydantic 模型。"""
     fields: dict[str, Any] = {}
     required = set(schema.get("required", []))
     for prop, spec in schema.get("properties", {}).items():
-        py_type = _JSON_TYPE_MAP.get(spec.get("type", "string"), str)
+        py_type = _resolve_py_type(spec)
         if prop in required:
             fields[prop] = (py_type, ...)
         else:

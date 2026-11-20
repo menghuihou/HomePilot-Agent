@@ -364,6 +364,9 @@ def test_decision_endpoint_resumes_approved(client, home_id):
         # 幂等：重复提交不报错，返回已处理状态。
         assert repeat.status_code == 200
         assert repeat.json()["status"] == "already_processed"
+        # 幂等重放也返回真实结果：线程 answer 含恢复运行的最终报告，
+        # 重复提交不再显示兜底文案「审批已处理」。
+        assert "模拟执行成功" in repeat.json()["report"]
     finally:
         monkeypatch.undo()
         _cleanup_approvals(thread_id)

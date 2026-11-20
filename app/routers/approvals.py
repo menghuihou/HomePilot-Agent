@@ -69,11 +69,18 @@ async def decide_approval(
             logger.info(
                 "审批重复提交：thread=%s 已处理（%s）", thread_id, latest.decision
             )
+            # 幂等重放也返回真实结果：决策时的恢复运行已把迁移摘要 /
+            # 诊断报告写入线程 answer（home_mode 与 diagnose 同口径），
+            # 重复提交同样能拿到结果，避免前端兜底文案误导为没有结果。
+            graph = await get_agent_graph()
+            state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+            # 与 _resumed_report 同口径：answer 优先，diagnose 旧口径兜底。
+            report = _resumed_report(state.values or {})
             return ApprovalDecisionResponse(
                 thread_id=thread_id,
                 decision=latest.decision,
                 status="already_processed",
-                report=None,
+                report=report,
             )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

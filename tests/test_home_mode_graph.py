@@ -89,6 +89,9 @@ def _stub_executor(calls: list):
             _append_event(int(device_id), "power_off", {"brightness": 0})
         if action["action"] == "turn_light_on" and device_id:
             _append_event(int(device_id), "power_on", {"brightness": 80})
+        if action["action"] == "set_light_brightness" and device_id:
+            brightness = action.get("target", {}).get("brightness") or 20
+            _append_event(int(device_id), "power_on", {"brightness": brightness})
         return {"ok": True, "detail": "ok"}
 
     return _executor
@@ -643,3 +646,50 @@ def test_stream_interrupt_done_answer_not_stale(client, home_id):
     done = [e for e in second if e["event"] == "done"]
     assert approval and approval[0]["action"] == "lock_door"
     assert done and done[0]["answer"] == "", done
+
+
+def test_night_brightness_adjust_low_risk_auto_applies(client, home_id):
+    """灯已开、仅亮度未达标：set_light_brightness 低风险自动调光不弹审批。
+
+    回归（用户实测）：亮度-only 动作曾落入未知动作 fail-safe（high +
+    强制审批）且无执行器可跳，形成「批准 → 跳过 → 再批准」死循环。
+    """
+    device_id = _create_device(client, home_id, "客厅灯", "light")
+    _append_event(device_id, "power_on", {"brightness": 80})
+    _seed_policy(
+        home_id,
+        "night",
+        {
+            "by_device_type": {
+                "light": {"power": "on", "brightness": 20, "risk": "low"}
+            },
+            "exclusions": [],
+            "conflict_checks": [],
+        },
+    )
+    calls: list = []
+    try:
+        result, _, thread_id = _run_home_mode(
+            home_id,
+            "打开夜间模式",
+            executor=_stub_executor(calls),
+            summarizer=_fake_summarizer("夜间调光完成（测试摘要）。"),
+        )
+
+        assert result["approval_decision"] == "auto"
+        assert [item["action"] for item in calls] == ["set_light_brightness"]
+        assert all(item["ok"] for item in result["execution_result"])
+        assert result["unresolved_devices"] == []
+        assert result["mode_summary"]["applied_count"] == 1
+
+        # 回读验证：亮度真实落到 20。
+        latest = _db_execute(
+            "SELECT payload FROM device_events WHERE device_id = %s "
+            "ORDER BY occurred_at DESC, id DESC LIMIT 1",
+            (device_id,),
+            fetch=True,
+        )
+        assert latest[0][0] == {"brightness": 20}
+    finally:
+        if thread_id:
+            _cleanup_approvals(thread_id)

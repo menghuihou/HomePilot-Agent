@@ -62,7 +62,7 @@ _MODE_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("away", ("出门", "离家", "离开")),
     ("sleep", ("睡觉", "睡眠", "入睡")),
     ("night", ("夜间", "夜晚模式", "晚上模式")),
-    ("home", ("回家", "到家", "回来")),
+    ("home", ("回家", "到家", "回来", "在家")),
 )
 
 _SUMMARY_SYSTEM_PROMPT = """你是家庭模式迁移的结果转写器。给你一份结构化迁移结果（JSON），把它转写成给用户看的中文摘要。
@@ -71,7 +71,6 @@ _SUMMARY_SYSTEM_PROMPT = """你是家庭模式迁移的结果转写器。给你�
 - 只转写给定信息，不得新增、删除任何设备或动作；
 - 待确认与未生效项必须如实列出设备与原因；
 - 全文 100 字以内，先说结果，再说待确认 / 未完成项。"""
-
 
 # 节点级 OTel tracer：经 observability.py 的全局 TracerProvider（OTLP）
 # 导出到 Langfuse，start_as_current_span 挂到环境请求上下文——节点在
@@ -235,6 +234,7 @@ def _build_summarizer(chat_model=None, summarizer=None):
 _ACTION_TOOL_BY_ID: dict[str, tuple[str, str]] = {
     "turn_light_on": ("light", "turn_light_on"),
     "turn_light_off": ("light", "turn_light_off"),
+    "set_light_brightness": ("light", "turn_light_on"),
     "turn_ac_on": ("ac", "set_ac_power"),
     "turn_ac_off": ("ac", "set_ac_power"),
     "set_ac_temperature": ("ac", "set_temperature"),
@@ -255,6 +255,12 @@ def _build_tool_args(action: dict) -> dict:
             "temperature": action.get("target", {}).get("temperature"),
         }
     if action_id == "turn_light_on":
+        args = {"device_id": device_id}
+        brightness = action.get("target", {}).get("brightness")
+        if brightness is not None:
+            args["brightness"] = brightness
+        return args
+    if action_id == "set_light_brightness":
         args = {"device_id": device_id}
         brightness = action.get("target", {}).get("brightness")
         if brightness is not None:
@@ -328,10 +334,10 @@ def _build_state_loader():
 
 
 def build_home_mode_graph(
-    chat_model=None,
-    summarizer=None,
-    executor=None,
-    checkpointer=None,
+        chat_model=None,
+        summarizer=None,
+        executor=None,
+        checkpointer=None,
 ):
     """构建模式子图；summarizer / executor 供测试注入桩实现。
 

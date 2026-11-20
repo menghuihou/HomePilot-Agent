@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import app.agent.chat as agent_chat
 from app.agent.chat import build_agent_graph
 from app.config import BASE_DIR, get_settings
-from app.mcp.client import McpToolClient
+from app.mcp.client import McpToolClient, _schema_to_args_model
 from tests.test_agent_chat import StubChatModel, StubRouterModel
 from tests.test_agent_diagnose import _create_device
 
@@ -173,3 +173,31 @@ def test_tool_failure_returns_error_message_to_model(client, home_id):
     assert any("工具调用失败" in str(m.content) for m in tool_messages)
     # 失败后对话仍然收口
     assert result["answer"] == "设备状态暂时查不到，稍后再试。"
+
+
+def test_schema_args_model_supports_anyof_optional_int():
+    """可选参数 anyOf（int | null）→ int | None 字段（夜间调光依赖）。
+
+    回归：anyOf 形态曾被兜底成 str，int 传参触发 ValidationError，
+    set_light_brightness 永远「工具暂不可用」。
+    """
+    model = _schema_to_args_model(
+        "turn_light_on_args",
+        {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "string"},
+                "brightness": {
+                    "anyOf": [{"type": "integer"}, {"type": "null"}],
+                    "default": None,
+                },
+            },
+            "required": ["device_id"],
+        },
+    )
+
+    fields = model.model_fields
+    assert "brightness" in fields
+    instance = model(device_id="1", brightness=20)
+    assert instance.brightness == 20
+    assert model(device_id="1", brightness=None).brightness is None
