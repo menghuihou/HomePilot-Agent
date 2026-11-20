@@ -30,10 +30,21 @@ def build_chat_model():
 
 
 def extract_text_content(content: object) -> str:
-    """提取消息正文；推理模型可能返回 thinking + text 多块内容，只保留正文。"""
-    if isinstance(content, list):
-        text = "".join(
-            block.get("text", "") for block in content if isinstance(block, dict)
-        )
-        return text or str(content)
-    return str(content)
+    """提取消息正文；推理模型可能返回 thinking + text 多块内容，只保留正文。
+
+    提取不到文本（如 max_tokens 截断后只剩 thinking / 签名块）时返回空串，
+    由调用方降级——绝不把原始 content 转成字符串返回，避免推理过程
+    整包泄漏给用户（2026-11-20 夜间迁移实测泄漏）。
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for block in content:
+        if isinstance(block, dict):
+            parts.append(str(block.get("text") or ""))
+        elif hasattr(block, "text"):
+            # 兼容 SDK 以对象（而非 dict）表示的内容块。
+            parts.append(str(block.text or ""))
+    return "".join(parts)

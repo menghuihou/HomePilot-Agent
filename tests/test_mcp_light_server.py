@@ -195,6 +195,31 @@ def test_turn_light_on_rejects_non_light_device(seeded_home):
     assert "不是灯光设备" in message
 
 
+def test_turn_light_on_accepts_optional_brightness(seeded_home):
+    """可选亮度参数：显式指定时按目标亮度落库（夜间模式低亮度依赖）。"""
+    device_id = _create_device(seeded_home, "客厅灯", "light")
+    _append_sync_event(device_id, "power_off", {"brightness": 0})
+
+    message = _call("turn_light_on", {"device_id": str(device_id), "brightness": 20})
+
+    assert message == "已打开客厅灯，当前亮度 20%"
+    event_type, payload = _latest_event(device_id)
+    assert event_type == "power_on"
+    assert payload == {"brightness": 20}
+
+
+def test_turn_light_on_rejects_out_of_range_brightness(seeded_home):
+    """亮度越界：结构化错误提示而非落库非法状态。"""
+    device_id = _create_device(seeded_home, "客厅灯", "light")
+    _append_sync_event(device_id, "power_off", {"brightness": 0})
+
+    message = _call("turn_light_on", {"device_id": str(device_id), "brightness": 150})
+
+    assert "超出范围" in message
+    event_type, _ = _latest_event(device_id)
+    assert event_type == "power_off"  # 未落任何新事件
+
+
 def test_get_device_status_thermostat_reports_temperature(seeded_home):
     device_id = _create_device(seeded_home, "卧室空调", "thermostat")
     _append_sync_event(device_id, "power_on", {"target_temperature": 26})

@@ -8,6 +8,7 @@ LLM 摘要注入桩，保证测试零真实模型调用。审批挂起的恢复�
 
 import asyncio
 import uuid
+from types import SimpleNamespace
 
 import psycopg
 import pytest
@@ -21,7 +22,11 @@ import app.agent.diagnose as diagnose_module
 import app.agent.home_mode_graph as home_mode_module
 from app.agent.chat import build_agent_graph
 from app.agent.home_mode import REASON_MEDIA_MUTED, REASON_OFFLINE
-from app.agent.home_mode_graph import build_home_mode_graph
+from app.agent.home_mode_graph import (
+    _build_summarizer,
+    _build_tool_args,
+    build_home_mode_graph,
+)
 from app.config import BASE_DIR, get_settings
 from app.main import application
 from app.mcp.client import McpToolClient
@@ -535,6 +540,46 @@ def test_main_graph_routes_home_mode_into_subgraph(client, home_id):
 
     assert result["intent"] == "home_mode"
     assert result["answer"] == "当前家庭模式是：normal。"
+
+
+def test_build_tool_args_passes_brightness_for_light_on():
+    """夜间低亮度：亮度目标随 turn_light_on 透传；无亮度动作只带设备。"""
+    args = _build_tool_args(
+        {
+            "device_id": "1",
+            "action": "turn_light_on",
+            "target": {"power": "on", "brightness": 20},
+        }
+    )
+    assert args == {"device_id": "1", "brightness": 20}
+    assert _build_tool_args(
+        {"device_id": "1", "action": "turn_light_off", "target": {"power": "off"}}
+    ) == {"device_id": "1"}
+
+
+def test_summarizer_falls_back_to_template_when_llm_empty(client, home_id):
+    """LLM 返回空正文（截断等）：降级确定性模板，绝不输出空文本。"""
+
+    class _EmptyModel:
+        async def ainvoke(self, messages, config=None):
+            return SimpleNamespace(content=[])
+
+    summarize = _build_summarizer(chat_model=_EmptyModel())
+    summary = {
+        "target_mode": "night",
+        "total_count": 2,
+        "applied_count": 0,
+        "blocked": [
+            {"device_name": "客厅空调", "reason": "设备离线，暂停执行，标记待确认"}
+        ],
+        "unresolved": [],
+        "failed": [],
+    }
+
+    text = asyncio.run(summarize(summary))
+
+    assert "夜间" in text
+    assert "客厅空调" in text
 
 
 def test_stream_interrupt_done_answer_not_stale(client, home_id):

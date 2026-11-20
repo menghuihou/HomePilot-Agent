@@ -214,18 +214,24 @@ def _build_summarizer(chat_model=None, summarizer=None):
 
     async def _summarize(summary: dict) -> str:
         try:
-            return await _default_summarizer(summary, chat_model=chat_model)
+            text = await _default_summarizer(summary, chat_model=chat_model)
         except Exception:
             # 摘要属展示层：LLM 故障不吞迁移结果，降级确定性模板。
             logger.warning("模式迁移摘要 LLM 转写失败，已降级模板", exc_info=True)
             return _render_summary(summary)
+        if not text.strip():
+            # 提取不到正文（GLM 思考块耗尽 max_tokens 截断等）：同样降级，
+            # 绝不把空文本 / 残留块当作摘要呈现给用户。
+            logger.warning("模式迁移摘要 LLM 返回空正文，已降级模板")
+            return _render_summary(summary)
+        return text
 
     return _summarize
 
 
 # 动作 → (域, MCP 工具名) 注册表：单一事实来源。灯光域已接入；空调域
 # 指向第 6 步交付的 ac_server.py（就位前启动失败按执行失败兜底）。
-# 亮度字段由灯光工具按默认亮度处理，Server MVP 不支持精确调光。
+# 亮度字段随动作透传给灯光工具（Server 支持可选亮度参数，缺省 80）。
 _ACTION_TOOL_BY_ID: dict[str, tuple[str, str]] = {
     "turn_light_on": ("light", "turn_light_on"),
     "turn_light_off": ("light", "turn_light_off"),
@@ -248,6 +254,12 @@ def _build_tool_args(action: dict) -> dict:
             "device_id": device_id,
             "temperature": action.get("target", {}).get("temperature"),
         }
+    if action_id == "turn_light_on":
+        args = {"device_id": device_id}
+        brightness = action.get("target", {}).get("brightness")
+        if brightness is not None:
+            args["brightness"] = brightness
+        return args
     return {"device_id": device_id}
 
 
