@@ -246,7 +246,11 @@ def _build_tool_args(action: dict) -> dict:
     device_id = str(action.get("device_id"))
     action_id = action.get("action")
     if action_id == "turn_ac_on":
-        return {"device_id": device_id, "on": True}
+        args = {"device_id": device_id, "on": True}
+        temperature = action.get("target", {}).get("temperature")
+        if temperature is not None:
+            args["temperature"] = temperature
+        return args
     if action_id == "turn_ac_off":
         return {"device_id": device_id, "on": False}
     if action_id == "set_ac_temperature":
@@ -334,10 +338,10 @@ def _build_state_loader():
 
 
 def build_home_mode_graph(
-        chat_model=None,
-        summarizer=None,
-        executor=None,
-        checkpointer=None,
+    chat_model=None,
+    summarizer=None,
+    executor=None,
+    checkpointer=None,
 ):
     """构建模式子图；summarizer / executor 供测试注入桩实现。
 
