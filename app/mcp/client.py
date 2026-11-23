@@ -13,11 +13,15 @@ from typing import Any
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from langchain_core.tools import BaseTool, StructuredTool
+from opentelemetry.trace import get_tracer
 from pydantic import BaseModel, create_model
 
 from app.config import BASE_DIR
+from app.observability import observation_payload
 
 logger = logging.getLogger(__name__)
+
+_mcp_tracer = get_tracer("home-pilot.mcp")
 
 _JSON_TYPE_MAP = {"string": str, "integer": int, "number": float, "boolean": bool}
 
@@ -95,11 +99,24 @@ class McpToolClient:
         tool_name = mcp_tool.name
 
         async def _acall(**kwargs):
-            result = await client.call_tool(tool_name, kwargs)
-            data = getattr(result, "data", None)
-            if data is not None:
+            # 业务层观测 span：LangChain TOOL / FastMCP 协议 span 不写
+            # input/output（Langfuse UI 显示 undefined），这里补实际参数
+            # 和返回值。所有子图的 MCP 调用统一经过此闭包，一处覆盖全部。
+            with _mcp_tracer.start_as_current_span(f"mcp-tool:{tool_name}") as span:
+                if span.is_recording():
+                    span.set_attribute("langfuse.observation.type", "span")
+                    span.set_attribute(
+                        "langfuse.observation.input", observation_payload(kwargs)
+                    )
+                result = await client.call_tool(tool_name, kwargs)
+                data = getattr(result, "data", None)
+                if data is None:
+                    data = result.content[0].text
+                if span.is_recording():
+                    span.set_attribute(
+                        "langfuse.observation.output", observation_payload(data)
+                    )
                 return data
-            return result.content[0].text
 
         def _sync_call(**kwargs):
             # from_function 不会自动识别 async func；同步路径显式拒绝，
