@@ -243,6 +243,8 @@ def build_agent_graph(
             return "inspect"
         if state["intent"] == "home_mode":
             return "home_mode"
+        if state["intent"] == "energy":
+            return "energy"
         return "direct_reply"
 
     def to_answer(state: AgentState) -> dict:

@@ -16,7 +16,7 @@ from app.agent.context import HOME_MODE_KEY, HomeContext
 from app.agent.state import last_human_message
 from app.llm_client import build_chat_model, default_model_name
 
-Intent = Literal["chat", "control", "diagnose", "inspect", "home_mode"]
+Intent = Literal["chat", "control", "diagnose", "inspect", "home_mode", "energy"]
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,7 @@ _SYSTEM_PROMPT_TEMPLATE = """你是智能家庭助手的意图路由器，只负
 - inspect：巡检全屋设备状态或索要家庭日报
 - home_mode：询问或切换家庭模式（在家 / 离家 / 夜间 / 睡眠），
   例如「我出门了」「准备睡觉」「现在是什么模式」
+- energy：查询用电 / 能耗，例如「看看这周用电量」「空调耗电怎么样」
 
 易混边界（按现象 vs 动作区分）：
 - 用户【报告故障现象】——不亮、离线、无反应、异响、漏水、状态异常——一律 diagnose，
