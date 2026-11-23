@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     model_base_url: str = ""
     model_api_key: str = ""
     light_model: str = ""
+    # 模型适配层 yaml 路径（第 8 步）：LLM_MODELS_YAML 环境变量可覆盖。
+    llm_models_yaml: str = ""
     # Streamlit 页面调用的 API 地址。
     streamlit_api_base_url: str = "http://127.0.0.1:8000"
     # 可观测性：OTel 资源服务名与 Langfuse 接入。

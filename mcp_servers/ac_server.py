@@ -123,7 +123,7 @@ async def get_ac_status(device_id: str) -> dict:
                 "error": f"设备 {device_id} 不存在或不是空调设备",
             }
         status = _status_from_event(device, await _latest_event(session, parsed))
-    return {"device_id": device_id, "name": device.name, **status}
+        return {"device_id": device_id, "name": device.name, **status}
 
 
 @mcp.tool
@@ -181,13 +181,13 @@ async def set_ac_power(
                 message = "已开机"
         else:
             message = "已关机"
-    return {
-        "device_id": device_id,
-        "name": device.name,
-        "power": on,
-        "temperature": payload.get("temperature"),
-        "message": message,
-    }
+        return {
+            "device_id": device_id,
+            "name": device.name,
+            "power": on,
+            "temperature": payload.get("temperature"),
+            "message": message,
+        }
 
 
 @mcp.tool
