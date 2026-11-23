@@ -79,14 +79,50 @@ _SUMMARY_SYSTEM_PROMPT = """你是家庭模式迁移的结果转写器。给你�
 _tracer = get_tracer("home-pilot.home-mode")
 
 
+def _observation_value(obj: Any) -> Any:
+    """Trace 序列化兜底：BaseMessage 转可读结构，其余转字符串。
+
+    LangGraph state 里的 messages 是 BaseMessage 对象，直接 str() 会输出
+    ``content='...' additional_kwargs=...`` 这种调试噪声；转成
+    {type, content} 后 Langfuse 里一眼可读。其余不可序列化对象
+    （pydantic home_context 等）降级字符串，保证 json.dumps 不炸。
+    """
+    if hasattr(obj, "type") and hasattr(obj, "content"):
+        return {"type": obj.type, "content": obj.content}
+    return str(obj)
+
+
+def _observation_payload(value: Any) -> str:
+    """节点入参/出参序列化：JSON 为主，极端对象（循环引用等）回退 repr。"""
+    try:
+        return json.dumps(value, ensure_ascii=False, default=_observation_value)
+    except (TypeError, ValueError):
+        return repr(value)
+
+
 def _traced(name: str):
-    """节点装饰器：为节点执行建一个 OTel span（异常自动记录到 span）。"""
+    """节点装饰器：为节点执行建 OTel span，并把入参/出参写入 Langfuse。
+
+    Langfuse 从 ``langfuse.observation.input`` / ``langfuse.observation.output``
+    OTel attribute 读取节点级入参和出参；不设置时 UI 显示 undefined。
+    is_recording 为 False（测试 / 追踪未配置）时跳过序列化，零开销。
+    """
 
     def _deco(fn):
         @functools.wraps(fn)
         async def _wrapped(state, *args, **kwargs):
-            with _tracer.start_as_current_span(name):
-                return await fn(state, *args, **kwargs)
+            with _tracer.start_as_current_span(name) as span:
+                if span.is_recording():
+                    span.set_attribute("langfuse.observation.type", "span")
+                    span.set_attribute(
+                        "langfuse.observation.input", _observation_payload(state)
+                    )
+                result = await fn(state, *args, **kwargs)
+                if span.is_recording():
+                    span.set_attribute(
+                        "langfuse.observation.output", _observation_payload(result)
+                    )
+                return result
 
         return _wrapped
 
