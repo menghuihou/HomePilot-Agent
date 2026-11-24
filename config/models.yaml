@@ -4,9 +4,9 @@ default_role: light
 roles:
   light:                          # 路由 / 槽位抽取 / 轻量任务
     primary:
-      model: claude-sonnet-4-5
+      model: glm-5.3-flash
     fallback:
-      model: claude-3-5-haiku-latest
+      model: glm-4.5-air
   flagship:                       # 诊断报告 / 审批说明（预留，暂未接线）
     primary:
-      model: claude-sonnet-4-5
+      model: glm-5.3-flash
