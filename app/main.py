@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from app.agent import chat as chat_module
 from app.agent.exceptions import HomeNotFoundError
 from app.config import get_settings
+from app.mcp.client import ac_mcp_client, light_mcp_client
 from app.observability import setup_observability
 from app.routers import approvals, chat, devices, homes, inspections, llm, preferences
 
@@ -24,9 +25,17 @@ async def lifespan(_: FastAPI):
     """审批续跑依赖 LangGraph checkpointer 内部表：启动即建表（幂等）。
 
     独立于 Alembic：这批表属于 LangGraph，不由项目迁移体系管理。
+    关闭段：uvicorn 排空在途请求后依次释放 MCP Server 子进程、
+    checkpoint 连接池与 SQLAlchemy 引擎池，热重启不留孤儿资源。
     """
     await chat_module.get_agent_graph()
     yield
+    await light_mcp_client.aclose()
+    await ac_mcp_client.aclose()
+    await chat_module.aclose_checkpoint_pool()
+    from app.database import engine
+
+    await engine.dispose()
 
 
 application = FastAPI(

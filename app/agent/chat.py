@@ -310,16 +310,20 @@ def build_agent_graph(
 # interrupt 状态存在发起诊断的 checkpointer 里，恢复接口换实例会
 # 查不到 thread 导致审批死锁（第 8 步审查确认的架构不变量）。
 _agent_graph_singleton = None
+# checkpoint 连接池的关闭句柄：池由 get_agent_graph 创建，lifespan
+# 关闭段经 aclose_checkpoint_pool 释放（进程退出前的资源卫生）。
+_checkpoint_pool = None
 
 
 async def get_agent_graph():
     """惰性构建主图；checkpointer 为 AsyncPostgresSaver（审批跨进程续跑）。"""
-    global _agent_graph_singleton
+    global _agent_graph_singleton, _checkpoint_pool
     if _agent_graph_singleton is None:
         # 延迟导入：CRUD 等非 chat 路径无需加载 checkpointer 依赖。
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
         pool = await build_checkpoint_pool()
+        _checkpoint_pool = pool
         saver = AsyncPostgresSaver(pool)
         # LangGraph 内部表（checkpoints 等），setup 幂等，独立于 Alembic。
         await saver.setup()
@@ -332,3 +336,16 @@ async def get_agent_graph():
             checkpointer=saver,
         )
     return _agent_graph_singleton
+
+
+async def aclose_checkpoint_pool() -> None:
+    """关闭 checkpoint 连接池（lifespan 关闭段调用）。
+
+    池随主图单例创建，关闭后同步重置主图单例——池已死，旧图不可复用，
+    下次 get_agent_graph 会带新池重建（测试重入与重启场景依赖此语义）。
+    """
+    global _agent_graph_singleton, _checkpoint_pool
+    if _checkpoint_pool is not None:
+        await _checkpoint_pool.close()
+    _checkpoint_pool = None
+    _agent_graph_singleton = None
