@@ -11,7 +11,12 @@ class Base(DeclarativeBase):
     """所有 ORM 模型的公共基类；Alembic 通过 Base.metadata 自动生成迁移。"""
 
 
-engine = create_async_engine(get_settings().database_url)
+engine = create_async_engine(
+    get_settings().database_url,
+    # PG 容器重启后池中死连接会让首个请求 500：取连接前轻量探测，
+    # 死连接透明重建（本机往返 <1ms，成本可忽略）。
+    pool_pre_ping=True,
+)
 
 session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
