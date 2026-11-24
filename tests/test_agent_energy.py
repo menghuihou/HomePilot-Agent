@@ -5,12 +5,14 @@ import uuid
 
 import psycopg
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 import app.agent.energy as energy_module
+from app.agent.chat import build_agent_graph
 from app.agent.energy import aggregate_energy, build_energy_graph
 from app.config import get_settings
+from tests.test_agent_chat import StubChatModel, StubRouterModel
 
 DIM = 1024
 
@@ -194,3 +196,47 @@ def test_energy_subgraph_llm_failure_falls_back_to_template(energy_home):
     result = _run_energy_graph(home_id, _BoomChatModel())
 
     assert "12.0 kWh" in result["answer"]
+
+
+def test_main_graph_routes_energy_into_subgraph(energy_home):
+    """主图挂载验证：energy 意图经条件边进入能耗子图（接线回归）。
+
+    子图独立测试不会暴露「子图建了但主图没挂载」的遗漏——缺挂载时
+    LangGraph 在 route 条件边直接抛 KeyError('energy')，用户看到
+    「处理失败：'energy'」。本用例钉住主图 → energy 子图完整链路。
+    """
+    home_id, _ = energy_home
+    engine = create_async_engine(get_settings().database_url)
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+    graph = build_agent_graph(
+        router_model=StubRouterModel("energy"),
+        chat_model=StubChatModel([]),
+        energy_graph=build_energy_graph(
+            chat_model=_StubChatModel("空调本周用电 12 kWh。")
+        ),
+    )
+    patch = pytest.MonkeyPatch()
+    patch.setattr("app.agent.chat.session_factory", session_maker)
+    patch.setattr(energy_module, "session_factory", session_maker)
+
+    async def _run():
+        try:
+            return await graph.ainvoke(
+                {
+                    "messages": [HumanMessage(content="本月用电量")],
+                    "home_id": home_id,
+                },
+                config={
+                    "configurable": {"thread_id": f"en-main-{uuid.uuid4().hex[:8]}"}
+                },
+            )
+        finally:
+            await engine.dispose()
+
+    try:
+        result = asyncio.run(_run())
+    finally:
+        patch.undo()
+
+    assert result["intent"] == "energy"
+    assert result["answer"] == "空调本周用电 12 kWh。"
