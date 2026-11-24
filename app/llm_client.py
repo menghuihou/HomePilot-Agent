@@ -135,9 +135,11 @@ def build_chat_model():
     return ChatAnthropic(**kwargs)
 
 
-def invoke_with_fallback(messages: list, config=None):
+async def invoke_with_fallback(messages: list, config=None):
     """主模型调用；异常或空回复时降级备用模型重试一次。
 
+    - 协程函数（调用方 await）：内部走异步 ainvoke，与子图 async
+      节点的调用方式对齐；
     - messages / config: 透传给模型 ainvoke；
     - 返回 AIMessage；两次都失败 / 空回复时返回 AIMessage("")，
       由调用方的模板兜底处理。
@@ -145,7 +147,7 @@ def invoke_with_fallback(messages: list, config=None):
     """
     primary = build_chat_model()
     try:
-        response = primary.ainvoke(messages, config=config)
+        response = await primary.ainvoke(messages, config=config)
         text = extract_text_content(response.content)
         if text.strip():
             return response
@@ -161,7 +163,7 @@ def invoke_with_fallback(messages: list, config=None):
         return AIMessage(content="")
     try:
         fb = build_chat_model_for(fallback_model)
-        response = fb.ainvoke(messages, config=config)
+        response = await fb.ainvoke(messages, config=config)
         text = extract_text_content(response.content)
         if text.strip():
             logger.info("已降级至 fallback 模型 %s", fallback_model.model)
