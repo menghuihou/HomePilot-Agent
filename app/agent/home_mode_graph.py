@@ -27,12 +27,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agent.context import DEFAULT_HOME_MODE, HOME_MODE_KEY
-from app.agent.diagnose import (
-    # 审批审计与恢复协议与 diagnose 同款：私有助手同包内复用，
-    # approvals API 按 thread 恢复对两类子图通用。
-    _ensure_pending_approval,
-    _record_approval_decision,
+from app.agent.approval_flow import (
     approval_allows_execution,
+    ensure_pending_approval,
+    record_approval_decision,
 )
 from app.agent.home_mode import (
     # 确定性核心全部来自纯函数模块；_device_id_for_risk 供 gate 复审
@@ -49,7 +47,12 @@ from app.agent.risk_rules import judge_risk
 from app.agent.state import last_human_message
 from app.database import session_factory
 from app.llm_client import build_chat_model, extract_text_content
-from app.mcp.client import fetch_device_status, get_ac_tools, get_light_tools
+from app.mcp.client import (
+    fetch_device_status,
+    get_ac_tools,
+    get_light_tools,
+    query_all_devices,
+)
 from app.models import Device, HomeModeRecord, HomePolicy, Preference
 from app.observability import observation_payload
 
@@ -317,25 +320,36 @@ async def _default_execute_action(action: dict) -> dict:
 def _build_state_loader():
     """当前状态装配：DB 设备清单 + 按域路由的 MCP 状态归一。
 
-    状态携带的 power / temperature 透传给纯函数——幂等跳过与回读比对
-    共用同一事实源，本层不合成、不编造；light 的 brightness 额外归一
-    出 power 布尔。
+    并发查询复用 query_all_devices（单设备超时 + 失败隔离）：一台卡死
+    设备只损失自己的查询，不拖住整次迁移。状态携带的 power /
+    temperature 透传给纯函数——幂等跳过与回读比对共用同一事实源，
+    本层不合成、不编造；light 的 brightness 额外归一出 power 布尔。
     """
 
     async def _fetch_states(devices: list[Device]) -> dict[str, dict]:
+        device_dicts = [
+            {"id": d.id, "name": d.name, "device_type": d.device_type}
+            for d in devices
+        ]
+        raw = await query_all_devices(
+            device_dicts,
+            lambda device: _fetch_status_for(device["device_type"], device["id"]),
+        )
         states: dict[str, dict] = {}
-        for device in devices:
-            try:
-                status = await _fetch_status_for(device.device_type, device.id)
-            except Exception:  # noqa: BLE001 —— MCP 故障降级为离线兜底，不中断整次迁移
-                # 查询失败 fail-safe 视同离线：状态未知设备不允许迁移动作，
-                # 由 detect_conflicts 拦下待确认。
-                logger.warning("设备 %s 状态查询失败，按离线兜底", device.id)
+        for device, status in zip(device_dicts, raw, strict=True):
+            if "error" in status:
+                # 查询失败 / 超时 fail-safe 视同离线：状态未知设备不允许
+                # 迁移动作，由 detect_conflicts 拦下待确认。
+                logger.warning(
+                    "设备 %s 状态查询失败，按离线兜底：%s",
+                    device["id"],
+                    status["error"],
+                )
                 status = {"online": False}
             state = {
-                "device_id": str(device.id),
-                "name": device.name,
-                "device_type": device.device_type,
+                "device_id": str(device["id"]),
+                "name": device["name"],
+                "device_type": device["device_type"],
                 "online": bool(status.get("online")),
             }
             # light 域归一：server 输出 brightness，补 power 布尔供纯函数比对。
@@ -347,7 +361,7 @@ def _build_state_loader():
                 state["power"] = bool(status["power"])
             if status.get("temperature") is not None:
                 state["temperature"] = status["temperature"]
-            states[str(device.id)] = state
+            states[str(device["id"])] = state
         return states
 
     return _fetch_states
@@ -469,7 +483,7 @@ def build_home_mode_graph(
             target_id,
             state.get("scope") or {},
         )
-        approval_id = await _ensure_pending_approval(
+        approval_id = await ensure_pending_approval(
             thread_id, state["home_id"], decision_info, target_id
         )
         resume_payload = interrupt(
@@ -483,7 +497,7 @@ def build_home_mode_graph(
             }
         )
         decision = resume_payload.get("decision")
-        await _record_approval_decision(
+        await record_approval_decision(
             approval_id, decision, resume_payload.get("reason")
         )
         if approval_allows_execution(decision):
@@ -495,6 +509,8 @@ def build_home_mode_graph(
 
     @_traced(name="home-mode-execute")
     async def _execute(state: dict) -> dict:
+        # 状态变更动作刻意串行：落库与审计顺序确定、避免网关并发压力；
+        # 只读路径（状态装配 / 回读）才并发（见 query_all_devices）。
         results = []
         for action in state.get("planned_changes") or []:
             outcome = await run_action(action)
@@ -515,15 +531,27 @@ def build_home_mode_graph(
         # 家庭级动作（lock_door，无 device_id）不参与状态回读：成功与否
         # 以执行器结果为准，状态回读只覆盖有实体设备的动作。
         device_planned = [a for a in planned if a.get("device_id") is not None]
+        readback_devices = [
+            {
+                "id": int(a["device_id"]),
+                "name": str(a.get("device_name") or ""),
+                "device_type": str(a.get("device_type") or ""),
+            }
+            for a in device_planned
+        ]
+        # 并发回读复用 query_all_devices（单设备超时 + 失败隔离）：
+        # 失败 / 超时的设备按未生效如实呈现，不静默成功。
+        raw = await query_all_devices(
+            readback_devices,
+            lambda device: _fetch_status_for(device["device_type"], device["id"]),
+        )
         readback_states: dict[str, dict] = {}
-        for action in device_planned:
+        for action, status in zip(device_planned, raw, strict=True):
             device_id = str(action["device_id"])
-            try:
-                status = await _fetch_status_for(
-                    str(action.get("device_type")), int(device_id)
+            if "error" in status:
+                logger.warning(
+                    "回读设备 %s 状态失败：%s", device_id, status["error"]
                 )
-            except Exception:  # noqa: BLE001 —— 回读失败按未生效如实呈现，不静默成功
-                logger.warning("回读设备 %s 状态失败", device_id)
                 status = {}
             if "brightness" in status:
                 status = {**status, "power": status["brightness"] > 0}

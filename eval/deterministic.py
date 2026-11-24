@@ -25,8 +25,8 @@ from typing import Any
 from langchain_core.messages import HumanMessage
 
 from app.agent.anomaly_rules import detect_anomalies
+from app.agent.approval_flow import approval_allows_execution
 from app.agent.context import HomeContext
-from app.agent.diagnose import approval_allows_execution
 from app.agent.home_mode import (
     apply_sleep_mute_policy,
     detect_conflicts,
@@ -36,12 +36,12 @@ from app.agent.hypotheses import compute_hypotheses, should_conclude, shrink
 from app.agent.inspect import (
     detect_report_type,
     format_daily_report,
-    query_all_devices,
     sort_anomalies,
 )
 from app.agent.risk_rules import judge_risk
 from app.agent.router import classify_intent
 from app.agent.wording import filter_assertions
+from app.mcp.client import query_all_devices
 from app.models import Approval, Preference
 from app.schemas import DeviceRead, HomeRead, MemberRead, RoomRead
 from eval.harness import Executor

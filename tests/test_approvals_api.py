@@ -15,6 +15,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.agent.approval_flow as approval_flow_module
 import app.agent.chat as agent_chat_module
 import app.agent.diagnose as diagnose_module
 import app.agent.risk_rules as risk_rules_module
@@ -76,6 +77,9 @@ def _build_graph(model, investigator, executor=None):
     )
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
+    monkeypatch.setattr(
+        approval_flow_module, "session_factory", session_maker
+    )  # 审批持久化已迁移至 approval_flow，同步 patch（跨事件循环约定）
     return graph, monkeypatch, engine, session_maker
 
 
@@ -412,6 +416,9 @@ def test_agent_graph_routes_diagnose_and_resumes(client, home_id):
     )
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
+    monkeypatch.setattr(
+        approval_flow_module, "session_factory", session_maker
+    )  # 审批持久化已迁移至 approval_flow，同步 patch（跨事件循环约定）
     # 主图 load_context / chat 子图用的是 agent_chat.session_factory
     # （真实 app engine 绑定 TestClient 门户循环），必须一并替换，
     # 否则跨循环 RuntimeError 会毒化共享连接池并污染后续测试。

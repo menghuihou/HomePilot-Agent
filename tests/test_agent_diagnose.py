@@ -13,6 +13,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.agent.approval_flow as approval_flow_module
 import app.agent.diagnose as diagnose_module
 from app.agent.diagnose import (
     FALLBACK_SYMPTOM_KEY,
@@ -102,6 +103,9 @@ def _run_extract(
     )
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
+    monkeypatch.setattr(
+        approval_flow_module, "session_factory", session_maker
+    )  # 审批持久化已迁移至 approval_flow，同步 patch（跨事件循环约定）
     thread_id = f"dx-{uuid.uuid4().hex[:8]}"
     try:
 

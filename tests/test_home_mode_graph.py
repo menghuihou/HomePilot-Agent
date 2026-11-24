@@ -18,6 +18,7 @@ from langgraph.types import Command
 from psycopg.types.json import Json
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.agent.approval_flow as approval_flow_module
 import app.agent.diagnose as diagnose_module
 import app.agent.home_mode_graph as home_mode_module
 from app.agent.chat import build_agent_graph
@@ -120,7 +121,7 @@ def _run_home_mode(
     """独立引擎运行模式子图；返回 (挂起前结果, 最终结果, thread_id)。
 
     resume 非空时在同一图实例内挂起后恢复（MemorySaver 不跨实例）。
-    审批助手内部使用 diagnose.session_factory 落审计行，与子图自身的
+    审批助手经 approval_flow.session_factory 落审计行，与子图自身的
     session_factory 一并替换为本次独立引擎（跨事件循环约定）。
     审批清理由调用方按返回的 thread_id 显式执行。
     """
@@ -157,6 +158,7 @@ def _run_home_mode(
     patch = pytest.MonkeyPatch()
     patch.setattr(home_mode_module, "session_factory", session_maker)
     patch.setattr(diagnose_module, "session_factory", session_maker)
+    patch.setattr(approval_flow_module, "session_factory", session_maker)
     patch.setattr(home_mode_module, "get_light_tools", _get_light_tools)
     patch.setattr(home_mode_module, "get_ac_tools", _get_ac_tools)
     patch.setattr(home_mode_module, "fetch_device_status", _fetch_status)

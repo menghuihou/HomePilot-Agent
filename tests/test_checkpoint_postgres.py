@@ -82,6 +82,13 @@ def test_postgres_checkpointer_resumes_across_restart(client, home_id):
             )
             monkeypatch = pytest.MonkeyPatch()
             monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
+            # 审批持久化经 approval_flow.session_factory 落库：一并 patch，
+            # 避免真实 app 池在测试循环内建连接、循环销毁后毒化后续用例。
+            import app.agent.approval_flow as approval_flow_module
+
+            monkeypatch.setattr(
+                approval_flow_module, "session_factory", session_maker
+            )
             try:
                 try:
                     config = {"configurable": {"thread_id": thread_id}}

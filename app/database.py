@@ -20,3 +20,24 @@ async def get_session() -> AsyncGenerator[AsyncSession, Any]:
     """FastAPI 依赖：为每个请求提供独立会话，请求结束后自动关闭。"""
     async with session_factory() as session:
         yield session
+
+
+def checkpoint_conninfo() -> str:
+    """AsyncConnectionPool 需要 psycopg 原生 URI：去掉 SQLAlchemy 方言前缀。"""
+    return get_settings().database_url_sync.replace(
+        "postgresql+psycopg://", "postgresql://", 1
+    )
+
+
+async def build_checkpoint_pool():
+    """审批续跑共用的 Postgres 连接池（autocommit；saver setup 必需）。
+
+    池跟随进程生命周期，由调用方负责关闭（生产环境即进程退出）。
+    """
+    from psycopg_pool import AsyncConnectionPool
+
+    pool = AsyncConnectionPool(
+        checkpoint_conninfo(), open=False, kwargs={"autocommit": True}
+    )
+    await pool.open()
+    return pool

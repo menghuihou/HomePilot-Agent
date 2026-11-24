@@ -20,13 +20,13 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agent.context import HomeContext, resolve_home_context
-from app.agent.diagnose import build_checkpoint_pool, build_diagnose_graph
+from app.agent.diagnose import build_diagnose_graph
 from app.agent.energy import build_energy_graph
 from app.agent.home_mode_graph import build_home_mode_graph
 from app.agent.inspect import build_inspect_graph, detect_report_type
 from app.agent.router import classify_intent, reply_for_intent, summarize_home_context
 from app.agent.state import AgentState, last_human_message
-from app.database import session_factory
+from app.database import build_checkpoint_pool, session_factory
 from app.llm_client import build_chat_model, default_model_name, extract_text_content
 from app.mcp.client import get_light_tools
 from app.models import Home, Preference

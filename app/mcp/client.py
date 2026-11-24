@@ -197,11 +197,78 @@ async def fetch_device_status(device_id: int) -> dict:
     return result if isinstance(result, dict) else {"error": "MCP 返回结构异常"}
 
 
+QUERY_TIMEOUT_SECONDS = 5.0
+
+
+async def _query_one(fetcher, device: dict, timeout_seconds: float) -> dict:
+    """单设备查询：包 asyncio.timeout，失败统一降级为 error 结构不向外抛。
+
+    正常路径下超时与调用异常都在这里消化；外层 gather 的
+    return_exceptions=True 只做最后兜底（见 query_all_devices）。
+    """
+    try:
+        async with asyncio.timeout(timeout_seconds):
+            status = await fetcher(device)
+    except TimeoutError:
+        return {
+            "device_id": device["id"],
+            "name": device["name"],
+            "error": f"查询超时（>{timeout_seconds:.0f} 秒）",
+        }
+    except Exception as exc:  # noqa: BLE001 —— 任何 MCP 调用故障都降级为单设备失败
+        return {
+            "device_id": device["id"],
+            "name": device["name"],
+            "error": f"MCP 调用失败：{exc}",
+        }
+    if not isinstance(status, dict):
+        return {
+            "device_id": device["id"],
+            "name": device["name"],
+            "error": "MCP 返回结构异常",
+        }
+    # 设备标识统一以业务库为准（int）；MCP 返回的 str 形式在此归一，
+    # 避免调用方两处 device_id 类型双轨。
+    status["device_id"] = device["id"]
+    status["name"] = device["name"]
+    return status
+
+
+async def query_all_devices(
+    devices: list[dict], fetcher, timeout_seconds: float = QUERY_TIMEOUT_SECONDS
+) -> list[dict]:
+    """并发查询全部设备状态；单设备超时不阻塞整体，结果与传入严格保序。
+
+    巡检 / 诊断 / 家庭模式子图共用的 MCP 并发查询原语：一台卡死设备
+    只损失自己的查询（超时降级），不拖住整体。
+    """
+    results = await asyncio.gather(
+        *(_query_one(fetcher, device, timeout_seconds) for device in devices),
+        return_exceptions=True,
+    )
+    # 双保险：_query_one 已消化超时与调用异常，这里只兜底真意外异常
+    # （如任务被取消后的残留），同样降级为 error 结构，绝不炸整体。
+    return [
+        (
+            result
+            if isinstance(result, dict)
+            else {
+                "device_id": device["id"],
+                "name": device["name"],
+                "error": f"意外异常：{result!r}",
+            }
+        )
+        for result, device in zip(results, devices, strict=True)
+    ]
+
+
 __all__ = [
     "McpToolClient",
+    "QUERY_TIMEOUT_SECONDS",
     "ac_mcp_client",
     "fetch_device_status",
     "get_ac_tools",
     "get_light_tools",
     "light_mcp_client",
+    "query_all_devices",
 ]
