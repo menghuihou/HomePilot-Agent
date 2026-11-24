@@ -17,20 +17,7 @@ from app.config import get_settings
 from mcp_servers import light_server
 
 
-def _conninfo() -> str:
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
-
-
-def _db_execute(query: str, params: tuple = (), fetch: bool = False):
-    with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:
-        cur.execute(query, params)
-        rows = cur.fetchall() if fetch else None
-        conn.commit()
-        return rows
-
-
+from tests.helpers import db_execute as _db_execute
 @pytest.fixture()
 def seeded_home():
     """创建临时家庭；测试后按外键依赖顺序清理。"""

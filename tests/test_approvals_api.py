@@ -40,12 +40,7 @@ HIGH_RISK_SCRIPT = {
 }
 
 
-def _conninfo() -> str:
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
-
-
+from tests.helpers import conninfo as _conninfo, cleanup_approvals as _cleanup_approvals
 def _approval_rows(thread_id: str) -> list[tuple]:
     """返回该会话的审批审计行（decision, action, risk_level）。"""
     with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:
@@ -57,12 +52,6 @@ def _approval_rows(thread_id: str) -> list[tuple]:
             (thread_id,),
         )
         return cur.fetchall()
-
-
-def _cleanup_approvals(thread_id: str) -> None:
-    with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM approvals WHERE thread_id = %s", (thread_id,))
-        conn.commit()
 
 
 def _build_graph(model, investigator, executor=None):

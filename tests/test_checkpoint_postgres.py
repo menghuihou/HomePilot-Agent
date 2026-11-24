@@ -23,11 +23,9 @@ from tests.test_agent_diagnose import (
     _create_device,
     _scripted_investigator,
 )
-from tests.test_approvals_api import (
-    HIGH_RISK_SCRIPT,
-    _cleanup_approvals,
-    _conninfo,
-)
+from tests.helpers import cleanup_approvals as _cleanup_approvals
+from tests.helpers import conninfo as _conninfo
+from tests.test_approvals_api import HIGH_RISK_SCRIPT
 
 
 def _cleanup_checkpoints(thread_id: str) -> None:

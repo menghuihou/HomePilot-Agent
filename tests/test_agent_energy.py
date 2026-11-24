@@ -17,20 +17,7 @@ from tests.test_agent_chat import StubChatModel, StubRouterModel
 DIM = 1024
 
 
-def _conninfo() -> str:
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
-
-
-def _db_execute(query: str, params: tuple = (), fetch: bool = False):
-    with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:
-        cur.execute(query, params)
-        rows = cur.fetchall() if fetch else None
-        conn.commit()
-        return rows
-
-
+from tests.helpers import db_execute as _db_execute
 @pytest.fixture()
 def energy_home():
     """临时家庭 + 2 台空调 + 8 条能耗事件；结束按外键顺序清理。"""
@@ -65,10 +52,6 @@ def energy_home():
     )
     _db_execute("DELETE FROM devices WHERE home_id = %s", (home_id,))
     _db_execute("DELETE FROM homes WHERE id = %s", (home_id,))
-
-
-def _conninfo_unused():
-    pass
 
 
 class _StubChatModel:

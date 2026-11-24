@@ -32,20 +32,7 @@ from app.agent.inspect import (
 from app.config import get_settings
 
 
-def _conninfo() -> str:
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
-
-
-def _db_execute(query: str, params: tuple = (), fetch: bool = False):
-    with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:
-        cur.execute(query, params)
-        rows = cur.fetchall() if fetch else None
-        conn.commit()
-        return rows
-
-
+from tests.helpers import db_execute as _db_execute
 @pytest.fixture()
 def inspect_home():
     """创建临时家庭与 2 台设备；测试后按外键依赖顺序清理。"""

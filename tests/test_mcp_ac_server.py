@@ -14,21 +14,7 @@ from psycopg.types.json import Json
 from mcp_servers import ac_server
 
 
-def _db_execute(query: str, params: tuple = (), fetch: bool = False):
-    import psycopg
-
-    from app.config import get_settings
-
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
-    with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
-        cur.execute(query, params)
-        rows = cur.fetchall() if fetch else None
-        conn.commit()
-        return rows
-
-
+from tests.helpers import db_execute as _db_execute
 @pytest.fixture()
 def seeded_home():
     """创建临时家庭；测试后按外键依赖顺序清理。"""

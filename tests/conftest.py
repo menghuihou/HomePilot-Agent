@@ -7,8 +7,6 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from app.config import get_settings
-
 # 测试进程不向共享 Langfuse 导出 trace：置空密钥使 observability 走
 # 「未配置」分支（环境变量优先级高于 .env），避免测试 trace 污染开发
 # Langfuse 实例。必须在导入 app.main 前生效（其导入即挂载插桩）。
@@ -22,11 +20,7 @@ os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 from app.main import application
 
 
-def _sync_conninfo() -> str:
-    """把 SQLAlchemy 同步连接串转换为 psycopg 可用的标准 PostgreSQL URI。"""
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+from tests.helpers import conninfo as _sync_conninfo
 
 
 @pytest.fixture(scope="session")

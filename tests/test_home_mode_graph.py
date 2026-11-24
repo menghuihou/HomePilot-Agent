@@ -36,20 +36,7 @@ from tests.test_agent_chat import StubChatModel, StubRouterModel
 from tests.test_chat_api import _parse_sse
 
 
-def _conninfo() -> str:
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
-
-
-def _db_execute(query: str, params: tuple = (), fetch: bool = False):
-    with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:
-        cur.execute(query, params)
-        rows = cur.fetchall() if fetch else None
-        conn.commit()
-        return rows
-
-
+from tests.helpers import db_execute as _db_execute, cleanup_approvals as _cleanup_approvals
 def _seed_policy(home_id: int, mode: str, rules: dict) -> None:
     _db_execute(
         """
@@ -103,10 +90,6 @@ def _fake_summarizer(text: str):
         return text
 
     return _summarize
-
-
-def _cleanup_approvals(thread_id: str) -> None:
-    _db_execute("DELETE FROM approvals WHERE thread_id = %s", (thread_id,))
 
 
 def _run_home_mode(
