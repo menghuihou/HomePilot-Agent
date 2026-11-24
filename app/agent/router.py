@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from app.agent.context import HOME_MODE_KEY, HomeContext
 from app.agent.state import last_human_message
+from app.agent.wording import sanitize_prompt_text
 from app.llm_client import build_chat_model, default_model_name
 
 Intent = Literal["chat", "control", "diagnose", "inspect", "home_mode", "energy"]
@@ -57,22 +58,54 @@ class RouterDecision(BaseModel):
     intent: Intent
 
 
+# Router System Prompt 的条目封顶：设备 / 偏好无界增长会把每次请求的
+# prompt 撑爆（token 成本随条数线性上涨）；家庭规模下上限足够宽裕。
+_MAX_DEVICES_IN_SUMMARY = 50
+_MAX_PREFS_IN_SUMMARY = 20
+
+
 def summarize_home_context(context: HomeContext) -> str:
-    """把家庭上下文压缩成 prompt 可读的几行摘要。"""
-    lines = [f"家庭：{context.home.name}（当前模式：{context.current_mode}）"]
-    lines.append("房间：" + ("、".join(room.name for room in context.rooms) or "无"))
+    """把家庭上下文压缩成 prompt 可读的几行摘要。
+
+    设备名 / 偏好等用户可控字段经 sanitize_prompt_text 净化（单行内联），
+    换行伪造列表项的 prompt 注入形态从根上消失；设备 / 偏好条数封顶。
+    """
+    lines = [
+        f"家庭：{sanitize_prompt_text(context.home.name)}"
+        f"（当前模式：{context.current_mode}）"
+    ]
     lines.append(
-        "成员：" + ("、".join(member.name for member in context.members) or "无")
+        "房间："
+        + (
+            "、".join(sanitize_prompt_text(room.name) for room in context.rooms)
+            or "无"
+        )
     )
     lines.append(
-        "设备：" + ("、".join(f"{d.name}(id={d.id})" for d in context.devices) or "无")
+        "成员："
+        + (
+            "、".join(sanitize_prompt_text(member.name) for member in context.members)
+            or "无"
+        )
     )
-    prefs = [
-        f"{p.pref_key}={p.pref_value}"
+    device_entries = [
+        f"{sanitize_prompt_text(d.name)}(id={d.id})" for d in context.devices
+    ]
+    if len(device_entries) > _MAX_DEVICES_IN_SUMMARY:
+        total_devices = len(device_entries)
+        device_entries = device_entries[:_MAX_DEVICES_IN_SUMMARY]
+        device_entries.append(f"…等 {total_devices} 台")
+    lines.append("设备：" + ("、".join(device_entries) or "无"))
+    pref_entries = [
+        f"{sanitize_prompt_text(p.pref_key)}={sanitize_prompt_text(p.pref_value)}"
         for p in context.preferences
         if p.pref_key != HOME_MODE_KEY
     ]
-    lines.append("偏好：" + ("；".join(prefs) or "无"))
+    if len(pref_entries) > _MAX_PREFS_IN_SUMMARY:
+        total_prefs = len(pref_entries)
+        pref_entries = pref_entries[:_MAX_PREFS_IN_SUMMARY]
+        pref_entries.append(f"…等 {total_prefs} 条")
+    lines.append("偏好：" + ("；".join(pref_entries) or "无"))
     return "\n".join(lines)
 
 

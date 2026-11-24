@@ -1,10 +1,27 @@
-"""巡检 / 诊断子图共用的话术过滤：过度断言词确定性替换（第 3 周引入）。
+"""LLM 输入 / 输出的话术卫生共享件（零 LLM，纯规则）。
 
-安全口径：LLM 输出一律过本过滤器，命中「一定 / 必然 / 已修复」类断言词
-→ 替换为「可能 / 建议检查」，替换事件进 trace；纯规则实现，零 LLM。
+- sanitize_prompt_text：用户可控字段进 prompt 前的净化（输入侧）；
+- apply_wording_filter / filter_assertions：过度断言词确定性替换（输出侧）。
 """
 
+import re
+
 from langfuse import get_client, observe
+
+# 控制字符（换行 / 制表 / C0 / DEL）：用户字段里的换行会在 System Prompt
+# 摘要列表里伪造独立行（prompt 注入形态），统一压成空格内联。
+_PROMPT_TEXT_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
+
+
+def sanitize_prompt_text(text: str) -> str:
+    """用户可控字段进 prompt 前的净化：控制字符压成空格并去首尾空白。
+
+    设备名 / 偏好等可经 API 写入的数据拼入 System Prompt 时，必须保持
+    单行内联——否则「客厅灯\\n【系统指令】…」会在摘要列表里伪造独立
+    条目（router / diagnose 抽取 / home_mode 三处共用本函数）。
+    """
+    return _PROMPT_TEXT_CONTROL_CHARS.sub(" ", text).strip()
+
 
 # 过度断言词的确定性替换表：长词在前，避免子串二次命中。
 ASSERTION_REPLACEMENTS: tuple[tuple[str, str], ...] = (

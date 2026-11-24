@@ -41,6 +41,7 @@ from app.agent.hypotheses import (
 from app.agent.risk_rules import judge_risk
 from app.agent.state import last_human_message
 from app.agent.wording import apply_wording_filter as _apply_wording_filter
+from app.agent.wording import sanitize_prompt_text as _sanitize_prompt_text
 from app.database import session_factory
 from app.llm_client import build_chat_model, default_model_name
 from app.mcp.client import fetch_device_status, get_light_tools
@@ -565,7 +566,8 @@ def build_diagnose_graph(
         else:
             device_list = (
                 "、".join(
-                    f"{d['name']}(id={d['id']}, {d['device_type']})"
+                    f"{_sanitize_prompt_text(d['name'])}"
+                    f"(id={d['id']}, {d['device_type']})"
                     for d in device_dicts
                 )
                 or "无"
