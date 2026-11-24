@@ -4,6 +4,7 @@
 MCPError，由调用方转成错误信息；重启应用即恢复。
 """
 
+import asyncio
 import logging
 import os
 from contextlib import AsyncExitStack
@@ -68,31 +69,43 @@ class McpToolClient:
         self._stack: AsyncExitStack | None = None
         self._client: Client | None = None
         self._tools: list[BaseTool] = []
+        self._start_lock = asyncio.Lock()
 
     async def ensure_started(self) -> list[BaseTool]:
-        """首次调用时拉起 Server 并缓存工具列表；已连接则直接返回缓存。"""
+        """首次调用时拉起 Server 并缓存工具列表；已连接则直接返回缓存。
+
+        启动段用锁 + 锁内二次检查串行化：_client 的赋值在
+        enter_async_context（拉起子进程 + 握手，长耗时 await）完成之后，
+        无锁并发冷启动会各自拉起 Server 并相互覆盖 _client/_stack——
+        竞态失败者的 AsyncExitStack 失联，子进程泄漏到进程退出
+        （实测 10 并发冷启动拉起 10 个 Server 实例，aclose 只能关最后
+        一个）。热路径（已连接）走锁外快速返回，无额外开销。
+        """
         if self._client is not None:
             return self._tools
-        self._stack = AsyncExitStack()
-        transport = StdioTransport(
-            self._command,
-            self._args,
-            # MCP SDK 默认只给子进程传最小环境白名单（PATH/HOME 等），
-            # DATABASE_URL/MODEL_* 会丢失：CI 上 server 启动即崩（Connection
-            # closed），本地则静默回退 .env 连到错误库。同机可信子进程，
-            # 显式透传完整父环境。
-            env=dict(os.environ),
-            cwd=str(self._cwd),
-        )
-        self._client = await self._stack.enter_async_context(Client(transport))
-        mcp_tools = await self._client.list_tools()
-        self._tools = [self._convert(tool) for tool in mcp_tools]
-        logger.info(
-            "MCP 动态发现 %d 个工具：%s",
-            len(self._tools),
-            [tool.name for tool in self._tools],
-        )
-        return self._tools
+        async with self._start_lock:
+            if self._client is not None:
+                return self._tools
+            self._stack = AsyncExitStack()
+            transport = StdioTransport(
+                self._command,
+                self._args,
+                # MCP SDK 默认只给子进程传最小环境白名单（PATH/HOME 等），
+                # DATABASE_URL/MODEL_* 会丢失：CI 上 server 启动即崩（Connection
+                # closed），本地则静默回退 .env 连到错误库。同机可信子进程，
+                # 显式透传完整父环境。
+                env=dict(os.environ),
+                cwd=str(self._cwd),
+            )
+            self._client = await self._stack.enter_async_context(Client(transport))
+            mcp_tools = await self._client.list_tools()
+            self._tools = [self._convert(tool) for tool in mcp_tools]
+            logger.info(
+                "MCP 动态发现 %d 个工具：%s",
+                len(self._tools),
+                [tool.name for tool in self._tools],
+            )
+            return self._tools
 
     def _convert(self, mcp_tool) -> BaseTool:
         client = self._client

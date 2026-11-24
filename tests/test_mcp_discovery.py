@@ -201,3 +201,40 @@ def test_schema_args_model_supports_anyof_optional_int():
     instance = model(device_id="1", brightness=20)
     assert instance.brightness == 20
     assert model(device_id="1", brightness=None).brightness is None
+
+
+def test_concurrent_ensure_started_spawns_server_once(monkeypatch):
+    """并发冷启动竞态回归：多协程同时 ensure_started 只拉起一个 Server。
+
+    无锁时 _client 的赋值在 enter_async_context（长耗时 await）之后，
+    并发调用各自通过空检查、各自拉起子进程并覆盖单例引用（实测 10 并发
+    → 10 个 Server 实例，aclose 后泄漏存活）。锁 + 锁内二次检查修复。
+    """
+    import app.mcp.client as client_module
+
+    mcp_client = _make_client()
+    transports: list[object] = []
+    real_transport = client_module.StdioTransport
+
+    def _counting_transport(*args, **kwargs):
+        transports.append(real_transport(*args, **kwargs))
+        return transports[-1]
+
+    monkeypatch.setattr(client_module, "StdioTransport", _counting_transport)
+
+    async def _run():
+        try:
+            results = await asyncio.gather(
+                *(mcp_client.ensure_started() for _ in range(10))
+            )
+            return results
+        finally:
+            await mcp_client.aclose()
+
+    results = asyncio.run(_run())
+
+    # 只构造一个 transport（一个子进程）；全部调用拿到同一份缓存工具。
+    assert len(transports) == 1
+    assert all(result == results[0] for result in results)
+    # aclose 语义：关闭后重置连接状态，下次 ensure_started 重新拉起。
+    assert mcp_client._client is None
