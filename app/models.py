@@ -9,11 +9,13 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Identity,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -441,11 +443,14 @@ class KnowledgeChunk(Base):
         CheckConstraint(
             "status IN ('active', 'retired')", name="ck_knowledge_chunks_status"
         ),
-        UniqueConstraint(
+        Index(
+            # 计划的重放语义要求 hash 变化时保留 retired 历史并插入新行；
+            # 因此唯一性只约束当前生效行，不阻止同一 key 的历史版本。
             "source_id",
             "chunk_key",
             "knowledge_version",
-            name="uq_knowledge_chunks_key",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
         ),
     )
 
