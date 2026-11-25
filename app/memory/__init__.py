@@ -9,7 +9,7 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings, get_settings
-from app.memory.database import DatabaseMemoryBackend
+from app.memory.database import DatabaseMemoryBackend, MemoryStoreError
 from app.memory.graph import GraphMemoryBackend
 from app.memory.mem0_backend import Mem0Backend
 from app.schemas import MemoryItem, MemoryQuery
@@ -67,4 +67,5 @@ __all__ = [
     "MemoryBackend",
     "MemoryBackendConfigError",
     "MemoryBackendUnavailableError",
+    "MemoryStoreError",
 ]

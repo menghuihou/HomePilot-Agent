@@ -140,7 +140,8 @@ class MemoryItem(BaseModel):
     scope: MemoryScope
     key: str = Field(min_length=1, max_length=100)
     value: str = Field(min_length=1, max_length=100)
-    source: str = Field(default="chat_tool", max_length=50)
+    # 对齐 preferences.source_type 的数据库列宽，保证合法 DTO 都能落库。
+    source: str = Field(default="chat_tool", max_length=20)
     updated_at: datetime | None = None
 
 

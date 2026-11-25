@@ -16,8 +16,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import InjectedState
-from sqlalchemy import func
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agent.context import HomeContext, resolve_home_context
 from app.agent.diagnose import build_diagnose_graph
@@ -29,7 +27,8 @@ from app.agent.state import AgentState, last_human_message
 from app.database import build_checkpoint_pool, session_factory
 from app.llm_client import build_chat_model, default_model_name, extract_text_content
 from app.mcp.client import get_light_tools
-from app.models import Home, Preference
+from app.memory import MemoryStoreError, build_memory_backend
+from app.schemas import MemoryItem, MemoryScope
 
 _CHAT_SYSTEM_PROMPT = """你是家庭智能助手「HomePilot」，用中文口语化回复。
 
@@ -60,27 +59,47 @@ class ChatState(TypedDict):
 
 @observe(as_type="tool", name="record_preference")
 async def _record_preference(home_id: int, pref_key: str, pref_value: str) -> str:
-    # 工具自管会话与事务；家庭不存在时返回失败说明，由 LLM 转告用户。
-    async with session_factory() as session:
-        home = await session.get(Home, home_id)
-        if home is None:
-            return f"记录失败：家庭 {home_id} 不存在"
-        stmt = (
-            pg_insert(Preference)
-            .values(
-                home_id=home_id,
-                member_id=None,
-                pref_key=pref_key,
-                pref_value=pref_value,
-            )
-            .on_conflict_do_update(
-                constraint="uq_preferences_home_member_key",
-                set_={"pref_value": pref_value, "updated_at": func.now()},
-            )
-        )
-        await session.execute(stmt)
-        await session.commit()
+    backend = build_memory_backend(database_session_factory=session_factory)
+    item = MemoryItem(
+        scope=MemoryScope(home_id=home_id),
+        key=pref_key,
+        value=pref_value,
+    )
+    try:
+        stored = await backend.store(item)
+    except MemoryStoreError as exc:
+        # 记录失败交给 LLM 转告用户；不中断整个 chat 子图。
+        return f"记录失败：{exc}"
+    _memory_store_observation(
+        home_id=stored.scope.home_id,
+        member_id=stored.scope.member_id,
+        key=stored.key,
+        source=stored.source,
+        value_length=len(stored.value),
+        updated_at=stored.updated_at.isoformat() if stored.updated_at else None,
+    )
     return f"已记录偏好：{pref_key}={pref_value}"
+
+
+@observe(name="memory-store")
+def _memory_store_observation(
+    *,
+    home_id: int,
+    member_id: int | None,
+    key: str,
+    source: str,
+    value_length: int,
+    updated_at: str | None,
+) -> dict:
+    """记录存储摘要：只保留 scope/key/source 与值长度，不落完整偏好值。"""
+    return {
+        "home_id": home_id,
+        "member_id": member_id,
+        "key": key,
+        "source": source,
+        "value_length": value_length,
+        "updated_at": updated_at,
+    }
 
 
 @tool
