@@ -7,14 +7,12 @@ _cleanup_approvals 曾分散在 8 个文件）。数据库走真实本地库是�
 
 import psycopg
 
-from app.config import get_settings
+from app.database import checkpoint_conninfo
 
 
 def conninfo() -> str:
-    """把 SQLAlchemy 同步连接串转换为 psycopg 可用的标准 PostgreSQL URI。"""
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    """psycopg 原生 URI：委托应用侧共享实现（方言归一口径单一来源）。"""
+    return checkpoint_conninfo()
 
 
 def db_execute(query: str, params: tuple = (), fetch: bool = False):

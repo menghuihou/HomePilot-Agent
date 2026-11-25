@@ -8,7 +8,6 @@ from pathlib import Path
 import psycopg
 
 from app.agent.anomaly_rules import OFFLINE_TIMEOUT
-from app.config import get_settings
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -29,6 +28,7 @@ SEED_POLICY_MODES = ("home", "away", "night", "sleep")
 SEED_AC_DEVICE_NAMES = ("书房空调", "客厅空调")
 
 
+from tests.helpers import conninfo as _conninfo
 def _load_seed() -> subprocess.CompletedProcess[str]:
     """以子进程方式执行真实种子命令，覆盖文档中的调用路径。"""
     return subprocess.run(
@@ -43,9 +43,7 @@ def _load_seed() -> subprocess.CompletedProcess[str]:
 
 def _seed_entity_counts() -> dict[str, int]:
     """返回种子家庭内各核心条目的出现次数（按名称聚合）。"""
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     counts: dict[str, int] = {}
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         for label, table, names in (
@@ -68,9 +66,7 @@ def _seed_entity_counts() -> dict[str, int]:
 
 def _seed_device_types() -> set[str]:
     """返回种子家庭内设备类型去重集合（第 4 周 4 域覆盖口径）。"""
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -89,9 +85,7 @@ def _latest_event(device_name: str) -> tuple[str, dict | None, datetime]:
 
     排序口径与 MCP Server 状态推导一致：occurred_at DESC, id DESC。
     """
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         cur.execute(
             """
@@ -123,9 +117,7 @@ def _load_home_policies() -> subprocess.CompletedProcess[str]:
 
 
 def _fetch_all(query: str, params: tuple = ()) -> list[tuple]:
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         cur.execute(query, params)
         return cur.fetchall()

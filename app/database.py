@@ -1,6 +1,7 @@
 from collections.abc import AsyncGenerator
 from typing import Any
 
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -28,10 +29,13 @@ async def get_session() -> AsyncGenerator[AsyncSession, Any]:
 
 
 def checkpoint_conninfo() -> str:
-    """AsyncConnectionPool 需要 psycopg 原生 URI：去掉 SQLAlchemy 方言前缀。"""
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    """psycopg 原生 URI：方言统一归一为同步 psycopg 驱动。
+
+    make_url 对任意 postgresql+XXX 方言稳健（字符串 replace 在驱动名
+    不匹配时会静默失配），密码的 percent-encoding 也由其正确保留。
+    """
+    url = make_url(get_settings().database_url_sync).set(drivername="postgresql")
+    return url.render_as_string(hide_password=False)
 
 
 async def build_checkpoint_pool():

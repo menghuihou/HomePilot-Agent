@@ -25,6 +25,7 @@ from app.agent.wording import filter_assertions as _filter_assertions
 from app.config import get_settings
 
 
+from tests.helpers import conninfo as _conninfo
 class StubExtractionModel:
     """固定槽位的结构化输出桩；slots=None 模拟 LLM 未返回结构化结果。"""
 
@@ -134,9 +135,7 @@ def _run_extract(
 
 def _cleanup_approvals(thread_id: str) -> None:
     """清理本测试产生的审批审计行，保持开发库干净。"""
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM approvals WHERE thread_id = %s", (thread_id,))
         conn.commit()
@@ -366,9 +365,7 @@ def test_advice_action_skips_gate_and_approval_record(client, home_id):
     approval = result["final_diagnosis"]["approval"]
     assert approval["decision"] == "advice"
     assert approval["action"] == "replace_bulb"
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM approvals WHERE home_id = %s", (home_id,))
         assert cur.fetchone()[0] == 0
