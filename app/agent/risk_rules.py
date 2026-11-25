@@ -30,6 +30,14 @@ RISK_RULES: tuple[RiskRule, ...] = (
     RiskRule(action="restart_device", level="medium", require_approval=False),
     RiskRule(action="turn_light_on", level="low", require_approval=False),
     RiskRule(action="turn_light_off", level="low", require_approval=False),
+    # 灯光调光（夜间低亮度等）：与开灯同级低风险；亮度目标随动作透传。
+    RiskRule(action="set_light_brightness", level="low", require_approval=False),
+    # 第 6 周空调域（家庭模式迁移的单设备动作）：开关与调温均为低中风险；
+    # 门锁（lock_door / unlock_door）刻意不入表——家庭级安全动作走
+    # 未知动作 fail-safe 兜底（high + 强制审批），宁误拦不漏放。
+    RiskRule(action="turn_ac_on", level="low", require_approval=False),
+    RiskRule(action="turn_ac_off", level="medium", require_approval=False),
+    RiskRule(action="set_ac_temperature", level="low", require_approval=False),
     # 灯光域知识库 fix_action（第 8 步对齐）：查询/清洁/人工联系类均为低风险。
     RiskRule(action="check_power", level="low", require_approval=False),
     RiskRule(action="replace_bulb", level="low", require_approval=False),

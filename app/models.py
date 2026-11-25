@@ -5,6 +5,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -323,6 +324,70 @@ class InspectionReport(Base):
     # 日报用：生成时刻的待确认审批快照（inspection 类型恒为空列表）。
     pending_approvals: Mapped[list] = mapped_column(JSONB, default=list)
     summary_text: Mapped[str | None] = mapped_column(Text)
+    synthetic: Mapped[bool] = mapped_column(default=True)
+    source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class HomePolicy(Base):
+    """家庭模式策略：某模式下各类设备的期望状态规则（模式迁移 = 策略执行）。
+
+    device_rules 口径（第 6 周，项目设备模型只有 device_type、尚无 2A.4
+    能力模型，因此按设备类型声明）：
+    - by_device_type: {设备类型: {目标状态字段: 值, ..., "risk": low/medium/high}}；
+    - lock: 家庭级高风险动作（如离家落锁），无锁设备时规则不命中；
+    - exclusions: 不参与迁移的设备名（网关等基础设施）。按名匹配，
+      设备改名 / 移除即失效，由 unmatched_exclusions 提供漂移告警；
+    - conflict_checks: 迁移前要做的冲突检查标识，供 detect_conflicts 消费。
+    规则里的 risk 仅供展示标注，审批门控唯一依据是 app/agent/risk_rules.py。
+    """
+
+    __tablename__ = "home_policies"
+    __table_args__ = (
+        UniqueConstraint("home_id", "mode", name="uq_home_policies_home_mode"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    home_id: Mapped[int] = mapped_column(ForeignKey("homes.id"))
+    # home / away / night / sleep（度假 / 访客等扩展模式后续接入）。
+    mode: Mapped[str] = mapped_column(String(50))
+    device_rules: Mapped[dict] = mapped_column(JSONB)
+    # 多套策略来源冲突时小值优先的裁决字段。
+    priority: Mapped[int] = mapped_column(Integer, default=100)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    synthetic: Mapped[bool] = mapped_column(default=True)
+    source_type: Mapped[str] = mapped_column(String(20), default="seed")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class HomeModeRecord(Base):
+    """家庭模式历史：每次模式迁移的计划、执行结果与回读快照。
+
+    一条未结束的记录（ended_at IS NULL）即家庭当前所处模式；
+    state 存迁移全量快照（计划 / 分级 / 回读结果），供审计与回滚骨架反推。
+    """
+
+    __tablename__ = "home_modes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    home_id: Mapped[int] = mapped_column(ForeignKey("homes.id"))
+    mode: Mapped[str] = mapped_column(String(50))
+    state: Mapped[dict] = mapped_column(JSONB)
+    reason: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     synthetic: Mapped[bool] = mapped_column(default=True)
     source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
     created_at: Mapped[datetime] = mapped_column(

@@ -98,11 +98,9 @@ def _stream_reply(payload: dict, captured: dict):
                 captured["error"] = event["message"]
                 yield f"⚠️ {event['message']}"
             elif event["event"] == "approval_required":
+                # 审批卡片（下方）接管交互：不再往气泡里流「待审批」文本，
+                # 避免决策完成后旧提示滞留对话历史造成误解。
                 captured["approval"] = event
-                yield (
-                    f"⛔ 高风险操作待审批：{event.get('action')}"
-                    f"（风险等级：{event.get('risk_level')}）"
-                )
             elif event["event"] == "inspect_progress":
                 captured["inspect_progress"] = event.get("message", "")
                 yield f"🔍 {event.get('message', '正在巡检设备状态…')}"
@@ -142,10 +140,15 @@ if prompt := st.chat_input("和助手聊聊，例如：把客厅灯叫主灯"):
         if captured.get("inspect_result"):
             # 巡检路径：delta 流里只有进度提示，摘要正文在这里补渲染。
             st.markdown(captured["inspect_result"].get("summary_text", final_text))
+        elif captured.get("approval"):
+            # 审批待决策：本轮不落普通回复气泡——审批卡片（下方）即交互
+            # 入口，决策结果由卡片流程追加，避免「待审批」提示滞留历史。
+            pass
         elif not streamed and final_text:
             st.markdown(final_text)
 
-    st.session_state.messages.append({"role": "assistant", "content": final_text})
+    if not captured.get("approval"):
+        st.session_state.messages.append({"role": "assistant", "content": final_text})
     if captured.get("error"):
         st.error(captured["error"])
     if captured.get("trace_id"):

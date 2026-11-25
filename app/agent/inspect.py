@@ -22,7 +22,6 @@
   序列化口径。
 """
 
-import asyncio
 import time
 from datetime import UTC, datetime
 from typing import Annotated, TypedDict
@@ -39,10 +38,14 @@ from app.agent import anomaly_rules as rules
 from app.agent.wording import apply_wording_filter as _apply_wording_filter
 from app.database import session_factory
 from app.llm_client import default_model_name
-from app.mcp.client import fetch_device_status
-from app.models import Approval, Device, InspectionReport
 
-QUERY_TIMEOUT_SECONDS = 5.0
+# 并发查询原语与超时常量归位 MCP 基础设施层（home_mode 子图共用）。
+from app.mcp.client import (
+    QUERY_TIMEOUT_SECONDS,
+    fetch_status_for_device,
+    query_all_devices,
+)
+from app.models import Approval, Device, InspectionReport
 
 REPORT_TYPE_INSPECTION = "inspection"
 REPORT_TYPE_DAILY = "daily_report"
@@ -99,64 +102,6 @@ def sort_anomalies(anomalies: list[dict]) -> list[dict]:
             _RULE_RANK.get(a["rule"], len(_RULE_RANK)),
         ),
     )
-
-
-async def _query_one(fetcher, device: dict, timeout_seconds: float) -> dict:
-    """单设备查询：包 asyncio.timeout，失败统一降级为 error 结构不向外抛。
-
-    正常路径下超时与调用异常都在这里消化；外层 gather 的
-    return_exceptions=True 只做最后兜底（见 query_all_devices）。
-    """
-    try:
-        async with asyncio.timeout(timeout_seconds):
-            status = await fetcher(device)
-    except TimeoutError:
-        return {
-            "device_id": device["id"],
-            "name": device["name"],
-            "error": f"查询超时（>{timeout_seconds:.0f} 秒）",
-        }
-    except Exception as exc:  # noqa: BLE001 —— 任何 MCP 调用故障都降级为单设备失败
-        return {
-            "device_id": device["id"],
-            "name": device["name"],
-            "error": f"MCP 调用失败：{exc}",
-        }
-    if not isinstance(status, dict):
-        return {
-            "device_id": device["id"],
-            "name": device["name"],
-            "error": "MCP 返回结构异常",
-        }
-    # 设备标识统一以业务库为准（int）；MCP 返回的 str 形式在此归一，
-    # 避免 raw_statuses 与 anomalies 里 device_id 类型双轨。
-    status["device_id"] = device["id"]
-    status["name"] = device["name"]
-    return status
-
-
-async def query_all_devices(
-    devices: list[dict], fetcher, timeout_seconds: float = QUERY_TIMEOUT_SECONDS
-) -> list[dict]:
-    """并发查询全部设备状态；单设备超时不阻塞整体，结果与传入严格保序。"""
-    results = await asyncio.gather(
-        *(_query_one(fetcher, device, timeout_seconds) for device in devices),
-        return_exceptions=True,
-    )
-    # 双保险：_query_one 已消化超时与调用异常，这里只兜底真意外异常
-    # （如任务被取消后的残留），同样降级为 error 结构，绝不炸整体。
-    return [
-        (
-            result
-            if isinstance(result, dict)
-            else {
-                "device_id": device["id"],
-                "name": device["name"],
-                "error": f"意外异常：{result!r}",
-            }
-        )
-        for result, device in zip(results, devices, strict=True)
-    ]
 
 
 def format_template_summary(total: int, normal: int, anomalies: list[dict]) -> str:
@@ -282,8 +227,8 @@ def _rule_distribution(anomalies: list[dict]) -> str:
 
 
 async def _mcp_status_fetcher(device: dict) -> dict:
-    """默认数据源：经 MCP 客户端动态发现调用 get_device_status。"""
-    return await fetch_device_status(device["id"])
+    """默认数据源：经 MCP 统一状态入口按设备域路由。"""
+    return await fetch_status_for_device(device["device_type"], device["id"])
 
 
 async def _default_summarizer(total: int, normal: int, anomalies: list[dict]) -> str:
@@ -363,7 +308,7 @@ def _make_llm_summarizer(model):
         ]
         try:
             report = await _invoke_summary(model, messages)
-        except Exception:  # noqa: BLE001 —— LLM 任何故障都降级，巡检能力不受影响
+        except Exception:
             return _fallback_summary("llm_error", total, normal, anomalies)
 
         text = report.summary_text.strip() if report and report.summary_text else ""

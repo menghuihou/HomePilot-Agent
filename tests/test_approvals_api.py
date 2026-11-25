@@ -15,6 +15,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.agent.approval_flow as approval_flow_module
 import app.agent.chat as agent_chat_module
 import app.agent.diagnose as diagnose_module
 import app.agent.risk_rules as risk_rules_module
@@ -24,6 +25,8 @@ from app.agent.diagnose import DiagnosisReport, SymptomSlots, build_diagnose_gra
 from app.agent.risk_rules import RiskRule
 from app.config import get_settings
 from app.main import application
+from tests.helpers import cleanup_approvals as _cleanup_approvals
+from tests.helpers import conninfo as _conninfo
 from tests.test_agent_chat import StubRouterModel
 from tests.test_agent_diagnose import (
     StubDiagnosisModel,
@@ -39,12 +42,6 @@ HIGH_RISK_SCRIPT = {
 }
 
 
-def _conninfo() -> str:
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
-
-
 def _approval_rows(thread_id: str) -> list[tuple]:
     """返回该会话的审批审计行（decision, action, risk_level）。"""
     with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:
@@ -56,12 +53,6 @@ def _approval_rows(thread_id: str) -> list[tuple]:
             (thread_id,),
         )
         return cur.fetchall()
-
-
-def _cleanup_approvals(thread_id: str) -> None:
-    with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:
-        cur.execute("DELETE FROM approvals WHERE thread_id = %s", (thread_id,))
-        conn.commit()
 
 
 def _build_graph(model, investigator, executor=None):
@@ -76,6 +67,9 @@ def _build_graph(model, investigator, executor=None):
     )
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
+    monkeypatch.setattr(
+        approval_flow_module, "session_factory", session_maker
+    )  # 审批持久化已迁移至 approval_flow，同步 patch（跨事件循环约定）
     return graph, monkeypatch, engine, session_maker
 
 
@@ -364,6 +358,9 @@ def test_decision_endpoint_resumes_approved(client, home_id):
         # 幂等：重复提交不报错，返回已处理状态。
         assert repeat.status_code == 200
         assert repeat.json()["status"] == "already_processed"
+        # 幂等重放也返回真实结果：线程 answer 含恢复运行的最终报告，
+        # 重复提交不再显示兜底文案「审批已处理」。
+        assert "模拟执行成功" in repeat.json()["report"]
     finally:
         monkeypatch.undo()
         _cleanup_approvals(thread_id)
@@ -409,6 +406,9 @@ def test_agent_graph_routes_diagnose_and_resumes(client, home_id):
     )
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
+    monkeypatch.setattr(
+        approval_flow_module, "session_factory", session_maker
+    )  # 审批持久化已迁移至 approval_flow，同步 patch（跨事件循环约定）
     # 主图 load_context / chat 子图用的是 agent_chat.session_factory
     # （真实 app engine 绑定 TestClient 门户循环），必须一并替换，
     # 否则跨循环 RuntimeError 会毒化共享连接池并污染后续测试。
@@ -448,3 +448,19 @@ def test_agent_graph_routes_diagnose_and_resumes(client, home_id):
     finally:
         monkeypatch.undo()
         _cleanup_approvals(thread_id)
+
+
+def test_resumed_report_prefers_answer_over_diagnosis_report():
+    """恢复报告取子图最终 answer：home_mode 迁移摘要与 diagnose 报告同口径。"""
+    # home_mode 子图：迁移摘要存 answer，final_diagnosis 为空。
+    assert (
+        approvals_router._resumed_report({"answer": "已切换到「离家」模式"})
+        == "已切换到「离家」模式"
+    )
+    # diagnose 子图：报告存 final_diagnosis.report（旧口径兜底）。
+    assert (
+        approvals_router._resumed_report({"final_diagnosis": {"report": "诊断报告"}})
+        == "诊断报告"
+    )
+    # 两者皆缺：None 交由前端兜底文案。
+    assert approvals_router._resumed_report({}) is None

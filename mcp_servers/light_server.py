@@ -151,24 +151,29 @@ async def get_device_status(device_id: str) -> dict:
 
 
 @mcp.tool
-async def turn_light_on(device_id: str) -> str:
-    """打开灯光设备；亮度为 0 时自动设为 80%。
+async def turn_light_on(device_id: str, brightness: int | None = None) -> str:
+    """打开灯光设备；可选指定目标亮度（1-100，缺省保持当前亮度，无记录时 80%）。
 
     风险等级：low。
 
     Args:
         device_id: 设备 id（业务库 devices.id），如 "17"。
+        brightness: 可选目标亮度（1-100）；缺省保持当前亮度，无记录时 80%。
     """
     parsed = _parse_device_id(device_id)
     if parsed is None:
         return f"错误：设备 id 不合法：{device_id}"
+    if brightness is not None and not 1 <= brightness <= 100:
+        return f"错误：亮度 {brightness} 超出范围（1-100）"
     device = await _load_device(parsed, "light")
     if device is None:
         return f"错误：设备 {device_id} 不存在或不是灯光设备"
-    brightness = _status_from_event(device, await _latest_event(parsed)).get(
-        "brightness"
-    )
-    new_brightness = brightness or 80
+    if brightness is None:
+        current = _status_from_event(device, await _latest_event(parsed)).get(
+            "brightness"
+        )
+        brightness = current or 80
+    new_brightness = brightness
     await _append_event(parsed, "power_on", {"brightness": new_brightness})
     return f"已打开{device.name}，当前亮度 {new_brightness}%"
 

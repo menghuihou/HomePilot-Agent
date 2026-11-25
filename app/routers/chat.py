@@ -79,7 +79,7 @@ def _current_trace_id() -> str:
     """
     try:
         trace_id = get_client().get_current_trace_id() or ""
-    except Exception:  # noqa: BLE001
+    except Exception:
         trace_id = ""
     if trace_id:
         return trace_id
@@ -210,10 +210,12 @@ async def chat_stream(
         # 审批挂起：图在 approval_gate 停下等用户决策，下发审批事件供
         # 前端渲染审批卡片（决策走 /approvals/{thread_id}/decision）。
         if state is not None and state.next:
+            interrupted = False
             for task in state.tasks or ():
                 fired = False
                 for graph_interrupt in getattr(task, "interrupts", ()) or ():
                     fired = True
+                    interrupted = True
                     interrupt_payload = graph_interrupt.value or {}
                     yield _sse(
                         "approval_required",
@@ -227,6 +229,11 @@ async def chat_stream(
                     )
                 if fired:
                     break
+            if interrupted:
+                # 挂起时线程里的 answer 是上一轮残留（如同会话先问过
+                # 「当前模式」），本轮尚未产生最终回复——置空，前端回退
+                # 展示挂起提示，避免把旧回复冒充本轮结果。
+                final_answer = ""
         # 巡检结果事件：结构化数据供前端渲染巡检卡片（与 approval 同级）。
         inspect_result = (state.values or {}).get("inspect_result") if state else None
         if inspect_result:

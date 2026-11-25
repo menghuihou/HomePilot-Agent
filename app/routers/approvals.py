@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["approvals"])
 
 
+def _resumed_report(result: dict) -> str | None:
+    """恢复运行的对外报告：优先子图最终 answer。
+
+    diagnose 的报告与 home_mode 的迁移摘要都写入 answer（to_answer 取
+    最后一条 AI 消息）；final_diagnosis.report 仅作旧口径兜底。
+    """
+    return result.get("answer") or (result.get("final_diagnosis") or {}).get("report")
+
+
 @router.post(
     "/approvals/{thread_id}/decision",
     response_model=ApprovalDecisionResponse,
@@ -60,11 +69,18 @@ async def decide_approval(
             logger.info(
                 "审批重复提交：thread=%s 已处理（%s）", thread_id, latest.decision
             )
+            # 幂等重放也返回真实结果：决策时的恢复运行已把迁移摘要 /
+            # 诊断报告写入线程 answer（home_mode 与 diagnose 同口径），
+            # 重复提交同样能拿到结果，避免前端兜底文案误导为没有结果。
+            graph = await get_agent_graph()
+            state = await graph.aget_state({"configurable": {"thread_id": thread_id}})
+            # 与 _resumed_report 同口径：answer 优先，diagnose 旧口径兜底。
+            report = _resumed_report(state.values or {})
             return ApprovalDecisionResponse(
                 thread_id=thread_id,
                 decision=latest.decision,
                 status="already_processed",
-                report=None,
+                report=report,
             )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -76,11 +92,10 @@ async def decide_approval(
     graph = await get_agent_graph()
     config = {"configurable": {"thread_id": thread_id}}
     result = await graph.ainvoke(Command(resume=body.model_dump()), config=config)
-    diagnosis = result.get("final_diagnosis") or {}
     logger.info("审批决策完成：thread=%s decision=%s", thread_id, body.decision)
     return ApprovalDecisionResponse(
         thread_id=thread_id,
         decision=body.decision,
         status="resumed",
-        report=diagnosis.get("report"),
+        report=_resumed_report(result),
     )

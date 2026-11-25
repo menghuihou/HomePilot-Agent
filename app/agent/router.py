@@ -1,11 +1,12 @@
 """意图路由器：结构化输出判定意图，非法输出兜底 chat。
 
-Router 只做分类，不回答业务问题；home_mode 直接读上下文回答，
+Router 只做分类，不回答业务问题；home_mode 进入模式迁移子图，
 diagnose / inspect 分别进入诊断和巡检子图，control 暂返回占位回复，
 chat 交给 chat 子图。
 """
 
 import logging
+from collections.abc import Sequence
 from typing import Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -14,9 +15,10 @@ from pydantic import BaseModel
 
 from app.agent.context import HOME_MODE_KEY, HomeContext
 from app.agent.state import last_human_message
+from app.agent.wording import sanitize_prompt_text
 from app.llm_client import build_chat_model, default_model_name
 
-Intent = Literal["chat", "control", "diagnose", "inspect", "home_mode"]
+Intent = Literal["chat", "control", "diagnose", "inspect", "home_mode", "energy"]
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,11 @@ _SYSTEM_PROMPT_TEMPLATE = """你是智能家庭助手的意图路由器，只负
 - control：控制设备，例如开关灯、调节温度
 - diagnose：设备故障排查，例如「灯不亮了」
 - inspect：巡检全屋设备状态或索要家庭日报
-- home_mode：询问家庭当前模式
+- home_mode：询问或切换家庭模式（在家 / 离家 / 夜间 / 睡眠），
+  例如「我出门了」「准备睡觉」「现在是什么模式」
+- energy：查询用电量 / 耗电量（当前仅支持空调用电数据），
+  例如「看看这周用电量」「空调耗电怎么样」；
+  用水 / 水表 / 燃气等非用电查询不属于 energy，走 chat
 
 易混边界（按现象 vs 动作区分）：
 - 用户【报告故障现象】——不亮、离线、无反应、异响、漏水、状态异常——一律 diagnose，
@@ -53,41 +59,68 @@ class RouterDecision(BaseModel):
     intent: Intent
 
 
+# Router System Prompt 的条目封顶：设备 / 偏好无界增长会把每次请求的
+# prompt 撑爆（token 成本随条数线性上涨）；家庭规模下上限足够宽裕。
+_MAX_DEVICES_IN_SUMMARY = 50
+_MAX_PREFS_IN_SUMMARY = 20
+
+
 def summarize_home_context(context: HomeContext) -> str:
-    """把家庭上下文压缩成 prompt 可读的几行摘要。"""
-    lines = [f"家庭：{context.home.name}（当前模式：{context.current_mode}）"]
-    lines.append("房间：" + ("、".join(room.name for room in context.rooms) or "无"))
+    """把家庭上下文压缩成 prompt 可读的几行摘要。
+
+    设备名 / 偏好等用户可控字段经 sanitize_prompt_text 净化（单行内联），
+    换行伪造列表项的 prompt 注入形态从根上消失；设备 / 偏好条数封顶。
+    """
+    lines = [
+        f"家庭：{sanitize_prompt_text(context.home.name)}"
+        f"（当前模式：{context.current_mode}）"
+    ]
     lines.append(
-        "成员：" + ("、".join(member.name for member in context.members) or "无")
+        "房间："
+        + ("、".join(sanitize_prompt_text(room.name) for room in context.rooms) or "无")
     )
     lines.append(
-        "设备：" + ("、".join(f"{d.name}(id={d.id})" for d in context.devices) or "无")
+        "成员："
+        + (
+            "、".join(sanitize_prompt_text(member.name) for member in context.members)
+            or "无"
+        )
     )
-    prefs = [
-        f"{p.pref_key}={p.pref_value}"
+    device_entries = [
+        f"{sanitize_prompt_text(d.name)}(id={d.id})" for d in context.devices
+    ]
+    if len(device_entries) > _MAX_DEVICES_IN_SUMMARY:
+        total_devices = len(device_entries)
+        device_entries = device_entries[:_MAX_DEVICES_IN_SUMMARY]
+        device_entries.append(f"…等 {total_devices} 台")
+    lines.append("设备：" + ("、".join(device_entries) or "无"))
+    pref_entries = [
+        f"{sanitize_prompt_text(p.pref_key)}={sanitize_prompt_text(p.pref_value)}"
         for p in context.preferences
         if p.pref_key != HOME_MODE_KEY
     ]
-    lines.append("偏好：" + ("；".join(prefs) or "无"))
+    if len(pref_entries) > _MAX_PREFS_IN_SUMMARY:
+        total_prefs = len(pref_entries)
+        pref_entries = pref_entries[:_MAX_PREFS_IN_SUMMARY]
+        pref_entries.append(f"…等 {total_prefs} 条")
+    lines.append("偏好：" + ("；".join(pref_entries) or "无"))
     return "\n".join(lines)
 
 
-def _dialog_window(messages: list[BaseMessage]) -> list[BaseMessage]:
+def _dialog_window(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
     """Router 可见窗口：只保留有正文的 human/ai 消息。
 
     过滤 ToolMessage 与空正文的 tool_calls AI 消息，避免窗口从中间截断后
     以 tool_result 或 assistant 开头被 Anthropic 协议拒绝（首条消息必须是
     user role，tool 消息必须紧跟对应 tool_use），静默降级 chat。
     """
-    dialog = [
-        m
-        for m in messages
-        if getattr(m, "type", "") in ("human", "ai") and getattr(m, "content", "")
-    ]
+    dialog = [m for m in messages if m.type in ("human", "ai") and m.content]
     return dialog[-_CONTEXT_WINDOW:]
 
 
-def _merge_consecutive_humans(messages: list[BaseMessage]) -> list[BaseMessage]:
+def _merge_consecutive_humans(
+    messages: Sequence[BaseMessage],
+) -> list[BaseMessage]:
     """合并窗口内连续 human 消息。
 
     用户连发多条或直答占位间隔后的历史会形成连续 human 序列，部分网关
@@ -121,7 +154,7 @@ async def _invoke_router(chat_model, prompt_messages: list) -> RouterDecision | 
 
 
 async def classify_intent(
-    messages: list[BaseMessage],
+    messages: Sequence[BaseMessage],
     home_context: HomeContext,
     chat_model=None,
 ) -> str:
@@ -160,6 +193,4 @@ async def classify_intent(
 
 def reply_for_intent(intent: str, home_context: HomeContext) -> str | None:
     """非 chat 意图的直接回复；chat 返回 None，交给 chat 子图处理。"""
-    if intent == "home_mode":
-        return f"当前家庭模式是：{home_context.current_mode}。"
     return _UNSUPPORTED_PLACEHOLDERS.get(intent)

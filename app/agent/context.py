@@ -55,15 +55,15 @@ async def resolve_home_context(home_id: int, session: AsyncSession) -> HomeConte
     )
     members = result.scalars().all()
 
-    result = await session.execute(
+    devices_result = await session.execute(
         select(Device).where(Device.home_id == home_id).order_by(Device.id)
     )
-    devices = result.scalars().all()
+    devices = devices_result.scalars().all()
 
-    result = await session.execute(
+    preferences_result = await session.execute(
         select(Preference).where(Preference.home_id == home_id).order_by(Preference.id)
     )
-    preferences = result.scalars().all()
+    preferences = preferences_result.scalars().all()
 
     current_mode = next(
         (p.pref_value for p in preferences if p.pref_key == HOME_MODE_KEY),

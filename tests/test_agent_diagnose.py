@@ -13,6 +13,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+import app.agent.approval_flow as approval_flow_module
 import app.agent.diagnose as diagnose_module
 from app.agent.diagnose import (
     FALLBACK_SYMPTOM_KEY,
@@ -22,6 +23,7 @@ from app.agent.diagnose import (
 )
 from app.agent.wording import filter_assertions as _filter_assertions
 from app.config import get_settings
+from tests.helpers import conninfo as _conninfo
 
 
 class StubExtractionModel:
@@ -102,6 +104,9 @@ def _run_extract(
     )
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(diagnose_module, "session_factory", session_maker)
+    monkeypatch.setattr(
+        approval_flow_module, "session_factory", session_maker
+    )  # 审批持久化已迁移至 approval_flow，同步 patch（跨事件循环约定）
     thread_id = f"dx-{uuid.uuid4().hex[:8]}"
     try:
 
@@ -130,9 +135,7 @@ def _run_extract(
 
 def _cleanup_approvals(thread_id: str) -> None:
     """清理本测试产生的审批审计行，保持开发库干净。"""
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         cur.execute("DELETE FROM approvals WHERE thread_id = %s", (thread_id,))
         conn.commit()
@@ -362,9 +365,7 @@ def test_advice_action_skips_gate_and_approval_record(client, home_id):
     approval = result["final_diagnosis"]["approval"]
     assert approval["decision"] == "advice"
     assert approval["action"] == "replace_bulb"
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM approvals WHERE home_id = %s", (home_id,))
         assert cur.fetchone()[0] == 0

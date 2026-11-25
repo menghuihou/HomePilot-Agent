@@ -96,7 +96,7 @@ def run_cases(
             )
         try:
             payload = executor(row)
-        except Exception as exc:  # noqa: BLE001 —— 执行器异常降级为该用例失败，不中断整体
+        except Exception as exc:
             payload = {
                 "score": 0.0,
                 "actual": {"error": f"{type(exc).__name__}: {exc}"},

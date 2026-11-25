@@ -9,7 +9,6 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import psycopg
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -30,20 +29,7 @@ from app.agent.inspect import (
     sort_anomalies,
 )
 from app.config import get_settings
-
-
-def _conninfo() -> str:
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
-
-
-def _db_execute(query: str, params: tuple = (), fetch: bool = False):
-    with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:
-        cur.execute(query, params)
-        rows = cur.fetchall() if fetch else None
-        conn.commit()
-        return rows
+from tests.helpers import db_execute as _db_execute
 
 
 @pytest.fixture()
@@ -237,6 +223,24 @@ def test_query_all_devices_converts_exceptions_to_error_structure():
     assert "MCP 连接崩溃" in results[0]["error"]
     # 保序对齐：错误结构携带对应设备标识（统一 int，与 anomalies 同轨）。
     assert results[1]["device_id"] == 2
+
+
+def test_default_status_fetcher_passes_device_domain(monkeypatch):
+    """巡检默认查询必须把 device_type 交给 MCP 统一状态入口。"""
+    calls = []
+
+    async def fake_fetch_status(device_type: str, device_id: int) -> dict:
+        calls.append((device_type, device_id))
+        return {"online": True, "power": True, "temperature": 26.0}
+
+    monkeypatch.setattr(inspect_module, "fetch_status_for_device", fake_fetch_status)
+
+    status = asyncio.run(
+        inspect_module._mcp_status_fetcher({"id": 12, "device_type": "ac"})
+    )
+
+    assert status == {"online": True, "power": True, "temperature": 26.0}
+    assert calls == [("ac", 12)]
 
 
 def test_query_timeout_constant_is_five_seconds():

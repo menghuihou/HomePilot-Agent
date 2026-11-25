@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import app.agent.chat as agent_chat
 from app.agent.chat import build_agent_graph
 from app.config import BASE_DIR, get_settings
-from app.mcp.client import McpToolClient
+from app.mcp.client import McpToolClient, _schema_to_args_model
 from tests.test_agent_chat import StubChatModel, StubRouterModel
 from tests.test_agent_diagnose import _create_device
 
@@ -173,3 +173,68 @@ def test_tool_failure_returns_error_message_to_model(client, home_id):
     assert any("工具调用失败" in str(m.content) for m in tool_messages)
     # 失败后对话仍然收口
     assert result["answer"] == "设备状态暂时查不到，稍后再试。"
+
+
+def test_schema_args_model_supports_anyof_optional_int():
+    """可选参数 anyOf（int | null）→ int | None 字段（夜间调光依赖）。
+
+    回归：anyOf 形态曾被兜底成 str，int 传参触发 ValidationError，
+    set_light_brightness 永远「工具暂不可用」。
+    """
+    model = _schema_to_args_model(
+        "turn_light_on_args",
+        {
+            "type": "object",
+            "properties": {
+                "device_id": {"type": "string"},
+                "brightness": {
+                    "anyOf": [{"type": "integer"}, {"type": "null"}],
+                    "default": None,
+                },
+            },
+            "required": ["device_id"],
+        },
+    )
+
+    fields = model.model_fields
+    assert "brightness" in fields
+    instance = model(device_id="1", brightness=20)
+    assert instance.brightness == 20
+    assert model(device_id="1", brightness=None).brightness is None
+
+
+def test_concurrent_ensure_started_spawns_server_once(monkeypatch):
+    """并发冷启动竞态回归：多协程同时 ensure_started 只拉起一个 Server。
+
+    无锁时 _client 的赋值在 enter_async_context（长耗时 await）之后，
+    并发调用各自通过空检查、各自拉起子进程并覆盖单例引用（实测 10 并发
+    → 10 个 Server 实例，aclose 后泄漏存活）。锁 + 锁内二次检查修复。
+    """
+    import app.mcp.client as client_module
+
+    mcp_client = _make_client()
+    transports: list[object] = []
+    real_transport = client_module.StdioTransport
+
+    def _counting_transport(*args, **kwargs):
+        transports.append(real_transport(*args, **kwargs))
+        return transports[-1]
+
+    monkeypatch.setattr(client_module, "StdioTransport", _counting_transport)
+
+    async def _run():
+        try:
+            results = await asyncio.gather(
+                *(mcp_client.ensure_started() for _ in range(10))
+            )
+            return results
+        finally:
+            await mcp_client.aclose()
+
+    results = asyncio.run(_run())
+
+    # 只构造一个 transport（一个子进程）；全部调用拿到同一份缓存工具。
+    assert len(transports) == 1
+    assert all(result == results[0] for result in results)
+    # aclose 语义：关闭后重置连接状态，下次 ensure_started 重新拉起。
+    assert mcp_client._client is None

@@ -19,6 +19,7 @@ from app.agent.chat import build_agent_graph, build_chat_graph, record_preferenc
 from app.agent.inspect import build_inspect_graph
 from app.agent.router import RouterDecision, classify_intent
 from app.config import get_settings
+from tests.helpers import conninfo as _conninfo
 
 
 class StubRouterModel:
@@ -324,9 +325,7 @@ def test_router_without_human_message_falls_back_to_chat():
 
 def _insert_pending_approval(home_id: int, action: str = "restart_gateway") -> int:
     """直接落一条 pending 审批（decision 为空），供日报待确认清单测试。"""
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         cur.execute(
             """

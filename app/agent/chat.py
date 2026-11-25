@@ -20,11 +20,13 @@ from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.agent.context import HomeContext, resolve_home_context
-from app.agent.diagnose import build_checkpoint_pool, build_diagnose_graph
+from app.agent.diagnose import build_diagnose_graph
+from app.agent.energy import build_energy_graph
+from app.agent.home_mode_graph import build_home_mode_graph
 from app.agent.inspect import build_inspect_graph, detect_report_type
 from app.agent.router import classify_intent, reply_for_intent, summarize_home_context
 from app.agent.state import AgentState, last_human_message
-from app.database import session_factory
+from app.database import build_checkpoint_pool, session_factory
 from app.llm_client import build_chat_model, default_model_name, extract_text_content
 from app.mcp.client import get_light_tools
 from app.models import Home, Preference
@@ -157,8 +159,9 @@ def build_chat_graph(
                 continue
             try:
                 call_args = dict(call["args"])
+                state_dict = dict(state)
                 for field in (selected.metadata or {}).get(_STATE_INJECTION_KEY, ()):
-                    call_args[field] = state[field]
+                    call_args[field] = state_dict[field]
                 result = await selected.ainvoke(call_args)
                 outputs.append(
                     ToolMessage(content=str(result), tool_call_id=call["id"])
@@ -190,6 +193,8 @@ def build_agent_graph(
     extra_tools_provider=None,
     diagnose_graph=None,
     inspect_graph=None,
+    home_mode_graph=None,
+    energy_graph=None,
     checkpointer=None,
 ):
     """构建 Agent 主图；模型与子图参数仅供测试注入桩实现。
@@ -202,6 +207,11 @@ def build_agent_graph(
     diagnose_graph = diagnose_graph or build_diagnose_graph()
     # 巡检子图缺省不带自有 checkpointer：继承主图持久化（与 diagnose 同口径）。
     inspect_graph = inspect_graph or build_inspect_graph()
+    # 家庭模式子图同口径：继承主图 checkpointer，高风险迁移 interrupt 由
+    # 主图统一持久化（approvals API 跨进程恢复）。
+    home_mode_graph = home_mode_graph or build_home_mode_graph(chat_model=chat_model)
+    # 能耗子图同口径：继承主图 checkpointer，无 interrupt 场景。
+    energy_graph = energy_graph or build_energy_graph(chat_model=chat_model)
 
     async def load_context(state: AgentState) -> dict:
         async with session_factory() as session:
@@ -209,8 +219,11 @@ def build_agent_graph(
         return {"home_context": context}
 
     async def route(state: AgentState) -> dict:
+        # load_context 先于 route 执行：home_context 必已注入。
+        home_context = state["home_context"]
+        assert home_context is not None
         intent = await classify_intent(
-            state["messages"], state["home_context"], chat_model=router_model
+            state["messages"], home_context, chat_model=router_model
         )
         _route_observation(intent, state["home_id"])
         updates: dict = {"intent": intent}
@@ -219,7 +232,7 @@ def build_agent_graph(
             # 巡检子图才会把待确认操作与提醒拼进报告（确定性关键词，零 LLM）。
             human_message = last_human_message(state["messages"])
             report_type = detect_report_type(
-                human_message.content if human_message else ""
+                extract_text_content(human_message.content) if human_message else ""
             )
             updates["report_type"] = report_type
         return updates
@@ -236,6 +249,10 @@ def build_agent_graph(
             return "diagnose"
         if state["intent"] == "inspect":
             return "inspect"
+        if state["intent"] == "home_mode":
+            return "home_mode"
+        if state["intent"] == "energy":
+            return "energy"
         return "direct_reply"
 
     def to_answer(state: AgentState) -> dict:
@@ -252,9 +269,12 @@ def build_agent_graph(
         return reply
 
     def direct_reply(state: AgentState) -> dict:
+        # load_context 先行：home_context 必已注入。
+        home_context = state["home_context"]
+        assert home_context is not None
         reply = _direct_reply_observation(
             state["intent"],
-            reply_for_intent(state["intent"], state["home_context"]) or "",
+            reply_for_intent(state["intent"], home_context) or "",
         )
         return {
             "answer": reply,
@@ -270,16 +290,22 @@ def build_agent_graph(
     builder.add_node("chat", chat_graph)
     builder.add_node("diagnose", diagnose_graph)
     builder.add_node("inspect", inspect_graph)
+    builder.add_node("home_mode", home_mode_graph)
+    builder.add_node("energy", energy_graph)
     builder.add_node("to_answer", to_answer)
     builder.add_node("direct_reply", direct_reply)
     builder.add_edge(START, "load_context")
     builder.add_edge("load_context", "route")
     builder.add_conditional_edges(
-        "route", _dispatch, ["chat", "diagnose", "inspect", "direct_reply"]
+        "route",
+        _dispatch,
+        ["chat", "diagnose", "inspect", "home_mode", "energy", "direct_reply"],
     )
     builder.add_edge("chat", "to_answer")
     builder.add_edge("diagnose", "to_answer")
     builder.add_edge("inspect", "to_answer")
+    builder.add_edge("home_mode", "to_answer")
+    builder.add_edge("energy", "to_answer")
     builder.add_edge("to_answer", END)
     builder.add_edge("direct_reply", END)
     # 缺省 MemorySaver 保持单测/本地行为不变；生产路径显式传
@@ -291,16 +317,20 @@ def build_agent_graph(
 # interrupt 状态存在发起诊断的 checkpointer 里，恢复接口换实例会
 # 查不到 thread 导致审批死锁（第 8 步审查确认的架构不变量）。
 _agent_graph_singleton = None
+# checkpoint 连接池的关闭句柄：池由 get_agent_graph 创建，lifespan
+# 关闭段经 aclose_checkpoint_pool 释放（进程退出前的资源卫生）。
+_checkpoint_pool = None
 
 
 async def get_agent_graph():
     """惰性构建主图；checkpointer 为 AsyncPostgresSaver（审批跨进程续跑）。"""
-    global _agent_graph_singleton
+    global _agent_graph_singleton, _checkpoint_pool
     if _agent_graph_singleton is None:
         # 延迟导入：CRUD 等非 chat 路径无需加载 checkpointer 依赖。
         from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
         pool = await build_checkpoint_pool()
+        _checkpoint_pool = pool
         saver = AsyncPostgresSaver(pool)
         # LangGraph 内部表（checkpoints 等），setup 幂等，独立于 Alembic。
         await saver.setup()
@@ -313,3 +343,16 @@ async def get_agent_graph():
             checkpointer=saver,
         )
     return _agent_graph_singleton
+
+
+async def aclose_checkpoint_pool() -> None:
+    """关闭 checkpoint 连接池（lifespan 关闭段调用）。
+
+    池随主图单例创建，关闭后同步重置主图单例——池已死，旧图不可复用，
+    下次 get_agent_graph 会带新池重建（测试重入与重启场景依赖此语义）。
+    """
+    global _agent_graph_singleton, _checkpoint_pool
+    if _checkpoint_pool is not None:
+        await _checkpoint_pool.close()
+    _checkpoint_pool = None
+    _agent_graph_singleton = None

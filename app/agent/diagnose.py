@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import operator
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
@@ -22,8 +22,14 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import interrupt
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import select
 
+from app.agent.approval_flow import (
+    approval_allows_execution,
+    ensure_pending_approval,
+    record_approval_decision,
+    record_auto_approval,
+)
 from app.agent.hypotheses import (
     build_final_diagnosis,
     compute_hypotheses,
@@ -35,12 +41,15 @@ from app.agent.hypotheses import (
 from app.agent.risk_rules import judge_risk
 from app.agent.state import last_human_message
 from app.agent.wording import apply_wording_filter as _apply_wording_filter
-from app.config import get_settings
+from app.agent.wording import sanitize_prompt_text as _sanitize_prompt_text
 from app.database import session_factory
 from app.llm_client import build_chat_model, default_model_name
-from app.mcp.client import fetch_device_status, get_light_tools
+from app.mcp.client import (
+    QUERY_TIMEOUT_SECONDS,
+    fetch_status_for_device,
+    get_light_tools,
+)
 from app.models import (
-    Approval,
     Device,
     DeviceEvent,
     FaultCause,
@@ -126,7 +135,7 @@ class DiagnosisReport(BaseModel):
     primary_cause_key: str | None = None
 
 
-def _format_symptom_dictionary(rows: list[FaultSymptom]) -> str:
+def _format_symptom_dictionary(rows: Sequence[FaultSymptom]) -> str:
     """把症状字典按设备域分组压缩成 prompt 可读的文本。"""
     groups: dict[str, list[str]] = {}
     for row in rows:
@@ -182,11 +191,13 @@ async def _load_domain_knowledge(domain: str) -> tuple[list, list[tuple[str, str
 
 
 async def _query_mcp_device_status(domain: str, device_id: int) -> dict | None:
-    """MVP 仅灯光域接入 MCP 状态查询；其他域工具随第 6 周域扩展补齐。"""
+    """诊断证据暂仅查灯光域；其他域等待知识库与排查规则接入后再启用。"""
     if domain != "light":
         return None
     try:
-        result = await fetch_device_status(device_id)
+        # 诊断是单设备查询，套用全局 MCP 超时，避免一台故障设备拖住整场排查。
+        async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+            result = await fetch_status_for_device(domain, device_id)
     except asyncio.CancelledError as exc:
         # 单独捕获 CancelledError：它不是 Exception 子类；MCP 故障
         # 不能把诊断链路以取消形式打断。
@@ -243,83 +254,6 @@ async def default_investigator(layer: str, symptom: dict, home_id: int) -> list[
     return []
 
 
-async def _ensure_pending_approval(
-    thread_id: str,
-    home_id: int,
-    decision_info,
-    target_device_id: int | None,
-) -> int:
-    """确保该会话存在 pending 审批记录；恢复时节点重跑直接复用同一行。
-
-    已知并发限制：同会话并发首次进入时，后到的 insert 会违反 pending
-    唯一索引（不变量仍由数据库兜底）；MVP 单用户下不处理该竞态。
-    """
-    async with session_factory() as session:
-        existing = (
-            (
-                await session.execute(
-                    select(Approval).where(
-                        Approval.thread_id == thread_id,
-                        Approval.decision.is_(None),
-                    )
-                )
-            )
-            .scalars()
-            .first()
-        )
-        if existing is not None:
-            return existing.id
-        approval = Approval(
-            thread_id=thread_id,
-            home_id=home_id,
-            action=decision_info.action,
-            target_device_id=target_device_id,
-            risk_level=decision_info.risk_level,
-            decision=None,
-        )
-        session.add(approval)
-        await session.commit()
-        return approval.id
-
-
-async def _record_approval_decision(
-    approval_id: int, decision: str, reason: str | None
-) -> None:
-    """决策后更新审批行；approvals 是审计基础数据，只更新不删除。"""
-    async with session_factory() as session:
-        approval = await session.get(Approval, approval_id)
-        if approval is None:
-            logger.warning("审批记录不存在：%s", approval_id)
-            return
-        approval.decision = decision
-        approval.reason = reason
-        approval.decided_at = func.now()
-        await session.commit()
-
-
-async def _record_auto_approval(
-    thread_id: str,
-    home_id: int,
-    decision_info,
-    target_device_id: int | None,
-    decision: str,
-) -> None:
-    """低中风险自动放行与范围阻断的审计落库（decision=auto/blocked）。"""
-    async with session_factory() as session:
-        approval = Approval(
-            thread_id=thread_id,
-            home_id=home_id,
-            action=decision_info.action,
-            target_device_id=target_device_id,
-            risk_level=decision_info.risk_level,
-            decision=decision,
-            reason=decision_info.reason,
-            decided_at=func.now(),
-        )
-        session.add(approval)
-        await session.commit()
-
-
 async def _home_gateway_device_id(home_id: int) -> int | None:
     """解析家庭网关设备主键（重启网关的执行目标）。"""
     async with session_factory() as session:
@@ -354,7 +288,10 @@ def _registers(action: str):
 @_registers("restart_gateway")
 async def _execute_restart_gateway(diagnosis: dict) -> str:
     """重启网关：网关 id 从业务库按家庭解析，传入 MCP 工具。"""
-    gateway_id = await _home_gateway_device_id(diagnosis.get("home_id"))
+    home_id = diagnosis.get("home_id")
+    if home_id is None:
+        return "执行失败：缺少 home_id 上下文，无法定位网关，请人工处理"
+    gateway_id = await _home_gateway_device_id(home_id)
     if gateway_id is None:
         return "执行失败：当前家庭未配置网关设备，请人工处理"
     tools = {tool.name: tool for tool in await get_light_tools()}
@@ -366,15 +303,6 @@ async def _execute_restart_gateway(diagnosis: dict) -> str:
 
 
 EXECUTABLE_ACTIONS = frozenset(_ACTION_EXECUTORS)
-
-
-def approval_allows_execution(decision: str | None) -> bool:
-    """审批决策 → 是否执行工具；仅 approved 放行（fail-close 口径）。
-
-    红线接缝：rejected / blocked / 缺失决策一律不执行，评估集据此
-    断言「审批拒绝 → 工具调用数为 0」。决策字段缺失同样视为拒绝。
-    """
-    return decision == "approved"
 
 
 async def default_executor(action: str, diagnosis: dict) -> str:
@@ -548,7 +476,9 @@ def _resolve_symptom(
     domain = DOMAIN_BY_DEVICE_TYPE.get(device["device_type"], "") if device else ""
     known_keys = valid_keys.get(domain, set())
     fallback = slots is None or domain == "" or slots.symptom_key not in known_keys
-    symptom_key = FALLBACK_SYMPTOM_KEY if fallback else slots.symptom_key
+    symptom_key = (
+        FALLBACK_SYMPTOM_KEY if fallback or slots is None else slots.symptom_key
+    )
     if fallback:
         # 当前观测是 span（非 generation），用 update_current_span 打兜底标记。
         get_client().update_current_span(
@@ -647,7 +577,8 @@ def build_diagnose_graph(
         else:
             device_list = (
                 "、".join(
-                    f"{d['name']}(id={d['id']}, {d['device_type']})"
+                    f"{_sanitize_prompt_text(str(d['name']))}"
+                    f"(id={d['id']}, {d['device_type']})"
                     for d in device_dicts
                 )
                 or "无"
@@ -781,7 +712,7 @@ def build_diagnose_graph(
             # 范围越界：禁止执行（与审批是两回事），审计落库后直接放行报告。
             decision = "blocked"
             execution_result = "操作超出授权范围，禁止自动执行"
-            await _record_auto_approval(
+            await record_auto_approval(
                 thread_id,
                 home_id,
                 decision_info,
@@ -789,7 +720,7 @@ def build_diagnose_graph(
                 decision,
             )
         elif decision_info.require_approval:
-            approval_id = await _ensure_pending_approval(
+            approval_id = await ensure_pending_approval(
                 thread_id, home_id, decision_info, target_device_id
             )
             resume_payload = interrupt(
@@ -804,7 +735,7 @@ def build_diagnose_graph(
                 }
             )
             decision = resume_payload.get("decision")
-            await _record_approval_decision(
+            await record_approval_decision(
                 approval_id, decision, resume_payload.get("reason")
             )
             if approval_allows_execution(decision):
@@ -814,7 +745,7 @@ def build_diagnose_graph(
         else:
             decision = "auto"
             execution_result = None
-            await _record_auto_approval(
+            await record_auto_approval(
                 thread_id,
                 home_id,
                 decision_info,
@@ -920,24 +851,3 @@ def build_diagnose_graph(
     builder.add_edge("approval_gate", "report")
     builder.add_edge("report", END)
     return builder.compile(checkpointer=checkpointer)
-
-
-def checkpoint_conninfo() -> str:
-    """AsyncConnectionPool 需要 psycopg 原生 URI：去掉 SQLAlchemy 方言前缀。"""
-    return get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
-
-
-async def build_checkpoint_pool():
-    """审批续跑共用的 Postgres 连接池（autocommit；saver setup 必需）。
-
-    池跟随进程生命周期，由调用方负责关闭（生产环境即进程退出）。
-    """
-    from psycopg_pool import AsyncConnectionPool
-
-    pool = AsyncConnectionPool(
-        checkpoint_conninfo(), open=False, kwargs={"autocommit": True}
-    )
-    await pool.open()
-    return pool

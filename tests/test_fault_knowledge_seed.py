@@ -8,7 +8,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
-from app.config import get_settings
+from tests.helpers import conninfo as _conninfo
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "db" / "seeds" / "data"
@@ -32,9 +32,7 @@ def _load_knowledge() -> subprocess.CompletedProcess[str]:
 
 def _knowledge_counts() -> dict[str, int]:
     """返回知识库三张表总量与按设备域分组的原因数量。"""
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     counts: dict[str, int] = {}
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         for table in ("fault_symptoms", "fault_causes", "symptom_causes"):
@@ -101,9 +99,7 @@ def test_knowledge_totals_within_mvp_range(db_ready) -> None:
     grouped = {key.split("/")[1] for key in counts if key.startswith("causes/")}
     assert grouped == EXPECTED_DEVICE_TYPES
 
-    conninfo = get_settings().database_url_sync.replace(
-        "postgresql+psycopg://", "postgresql://", 1
-    )
+    conninfo = _conninfo()
     with psycopg.connect(conninfo) as conn, conn.cursor() as cur:
         cur.execute(
             """

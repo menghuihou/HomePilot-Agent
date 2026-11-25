@@ -1,0 +1,12 @@
+# 模型适配层：角色 → 模型映射（换模型只改这个文件，不改代码）
+# 密钥不进 yaml（继续走 MODEL_API_KEY / MODEL_BASE_URL 环境变量）
+default_role: light
+roles:
+  light:                          # 路由 / 槽位抽取 / 轻量任务
+    primary:
+      model: glm-5.3-flash
+    fallback:
+      model: glm-4.5-air
+  flagship:                       # 诊断报告 / 审批说明（预留，暂未接线）
+    primary:
+      model: glm-5.3-flash
