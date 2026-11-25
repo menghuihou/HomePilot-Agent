@@ -26,6 +26,9 @@ _mcp_tracer = get_tracer("home-pilot.mcp")
 
 _JSON_TYPE_MAP = {"string": str, "integer": int, "number": float, "boolean": bool}
 
+# 所有域路由 / 工具调用统一遵守的超时；子进程冷启动或设备卡死不得拖垮调用方。
+QUERY_TIMEOUT_SECONDS = 5.0
+
 
 def _resolve_py_type(spec: dict) -> type:
     """JSON Schema 属性 → Python 类型。
@@ -183,24 +186,62 @@ async def get_ac_tools() -> list[BaseTool]:
     return await ac_mcp_client.ensure_started()
 
 
+# 域注册表是客户端抽象的唯一切换点；业务子图不得再直接按设备类型
+# 二选一客户端。新增设备域时在这里补一行。
+_DOMAIN_CLIENT_GETTERS = {
+    "light": get_light_tools,
+    "ac": get_ac_tools,
+}
+
+
+async def get_domain_tools(domain: str) -> list[BaseTool]:
+    """按设备域选择 MCP 客户端；新增域只扩展本注册表。"""
+    getter = _DOMAIN_CLIENT_GETTERS.get(domain)
+    if getter is None:
+        raise ValueError(f"未接入的设备域：{domain}")
+    return await getter()
+
+
+async def call_domain_tool(domain: str, tool_name: str, arguments: dict) -> Any:
+    """调用指定设备域的 MCP 工具；工具未注册时抛 LookupError。
+
+    统一套用 MCP 超时：设备操作不能因子进程冷启动/卡死无限挂起。
+    """
+    tools = {tool.name: tool for tool in await get_domain_tools(domain)}
+    tool = tools.get(tool_name)
+    if tool is None:
+        raise LookupError(f"{domain} 域工具 {tool_name} 不可用")
+    async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+        return await tool.ainvoke(arguments)
+
+
 async def fetch_device_status(device_id: int) -> dict:
-    """按业务库主键查询任意设备域的当前状态（get_device_status）。
+    """按业务库主键走通用域 Server 查询状态（get_device_status）。
 
     巡检子图与诊断子图的共享数据源：id 约定统一为业务库 devices.id，
     在 MCP 调用参数处转字符串；MCP 侧故障的降级策略（标记查询失败 /
     本轮不产出证据）由调用方决定。本函数只做结构归一——非 dict 返回
     统一转为 error 结构；MCP Server 启动失败和工具调用异常都会向外传播。
     """
-    tools = {tool.name: tool for tool in await get_light_tools()}
-    tool = tools.get("get_device_status")
-    if tool is None:
-        return {"error": "MCP 工具 get_device_status 未注册"}
-    # MCP Server 按业务库 devices.id 查询：直接传库内主键。
-    result = await tool.ainvoke({"device_id": str(device_id)})
+    # 默认域仍是通用状态 Server；路由必须同样经过域注册表，避免绕过抽象。
+    result = await call_domain_tool(
+        "light", "get_device_status", {"device_id": str(device_id)}
+    )
     return result if isinstance(result, dict) else {"error": "MCP 返回结构异常"}
 
 
-QUERY_TIMEOUT_SECONDS = 5.0
+async def fetch_status_for_device(device_type: str, device_id: int) -> dict:
+    """统一状态入口：按设备域路由到对应 MCP Server 并归一返回结构。
+
+    ac 使用专用 get_ac_status；其余域继续走通用 get_device_status。
+    调用异常向外传播，由 query_all_devices 或子图决定降级策略。
+    """
+    if device_type == "ac":
+        result = await call_domain_tool(
+            "ac", "get_ac_status", {"device_id": str(device_id)}
+        )
+        return result if isinstance(result, dict) else {"error": "MCP 返回结构异常"}
+    return await fetch_device_status(device_id)
 
 
 async def _query_one(fetcher, device: dict, timeout_seconds: float) -> dict:
@@ -269,8 +310,11 @@ __all__ = [
     "QUERY_TIMEOUT_SECONDS",
     "McpToolClient",
     "ac_mcp_client",
+    "call_domain_tool",
     "fetch_device_status",
+    "fetch_status_for_device",
     "get_ac_tools",
+    "get_domain_tools",
     "get_light_tools",
     "light_mcp_client",
     "query_all_devices",

@@ -122,14 +122,23 @@ def _run_home_mode(
         return await light_client.ensure_started()
 
     async def _get_ac_tools():
-        # ac_server.py 第 6 步交付；未交付前启动失败，由执行器兜底。
-        return await home_mode_module.get_ac_tools()
+        # 本组用例刻意不启动真实 ac_server：按域失败口径验证离线兜底。
+        return []
 
-    async def _fetch_status(device_id: int) -> dict:
+    async def _get_domain_tools(domain: str):
+        if domain == "light":
+            return await _get_light_tools()
+        if domain == "ac":
+            return await _get_ac_tools()
+        raise ValueError(f"未知设备域：{domain}")
+
+    async def _fetch_status(device_type: str, device_id: int) -> dict:
         tools = {tool.name: tool for tool in await _get_light_tools()}
         tool = tools.get("get_device_status")
         if tool is None:
             return {"error": "MCP 工具 get_device_status 未注册"}
+        if device_type == "ac":
+            return {"error": "ac 域 Server 在本组用例中模拟不可用"}
         result = await tool.ainvoke({"device_id": str(device_id)})
         return result if isinstance(result, dict) else {"error": "MCP 返回结构异常"}
 
@@ -142,9 +151,8 @@ def _run_home_mode(
     patch.setattr(home_mode_module, "session_factory", session_maker)
     patch.setattr(diagnose_module, "session_factory", session_maker)
     patch.setattr(approval_flow_module, "session_factory", session_maker)
-    patch.setattr(home_mode_module, "get_light_tools", _get_light_tools)
-    patch.setattr(home_mode_module, "get_ac_tools", _get_ac_tools)
-    patch.setattr(home_mode_module, "fetch_device_status", _fetch_status)
+    patch.setattr(home_mode_module, "fetch_status_for_device", _fetch_status)
+    patch.setattr(home_mode_module, "get_domain_tools", _get_domain_tools)
     thread_id = f"hm-{uuid.uuid4().hex[:8]}"
     config = {"configurable": {"thread_id": thread_id}}
     try:

@@ -225,6 +225,24 @@ def test_query_all_devices_converts_exceptions_to_error_structure():
     assert results[1]["device_id"] == 2
 
 
+def test_default_status_fetcher_passes_device_domain(monkeypatch):
+    """巡检默认查询必须把 device_type 交给 MCP 统一状态入口。"""
+    calls = []
+
+    async def fake_fetch_status(device_type: str, device_id: int) -> dict:
+        calls.append((device_type, device_id))
+        return {"online": True, "power": True, "temperature": 26.0}
+
+    monkeypatch.setattr(inspect_module, "fetch_status_for_device", fake_fetch_status)
+
+    status = asyncio.run(
+        inspect_module._mcp_status_fetcher({"id": 12, "device_type": "ac"})
+    )
+
+    assert status == {"online": True, "power": True, "temperature": 26.0}
+    assert calls == [("ac", 12)]
+
+
 def test_query_timeout_constant_is_five_seconds():
     """超时阈值锁定为计划口径 5 秒，改动需显式评估。"""
     assert QUERY_TIMEOUT_SECONDS == 5.0

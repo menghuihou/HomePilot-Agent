@@ -40,7 +40,11 @@ from app.database import session_factory
 from app.llm_client import default_model_name
 
 # 并发查询原语与超时常量归位 MCP 基础设施层（home_mode 子图共用）。
-from app.mcp.client import QUERY_TIMEOUT_SECONDS, fetch_device_status, query_all_devices
+from app.mcp.client import (
+    QUERY_TIMEOUT_SECONDS,
+    fetch_status_for_device,
+    query_all_devices,
+)
 from app.models import Approval, Device, InspectionReport
 
 REPORT_TYPE_INSPECTION = "inspection"
@@ -223,8 +227,8 @@ def _rule_distribution(anomalies: list[dict]) -> str:
 
 
 async def _mcp_status_fetcher(device: dict) -> dict:
-    """默认数据源：经 MCP 客户端动态发现调用 get_device_status。"""
-    return await fetch_device_status(device["id"])
+    """默认数据源：经 MCP 统一状态入口按设备域路由。"""
+    return await fetch_status_for_device(device["device_type"], device["id"])
 
 
 async def _default_summarizer(total: int, normal: int, anomalies: list[dict]) -> str:

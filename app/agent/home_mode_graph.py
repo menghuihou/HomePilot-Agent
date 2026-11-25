@@ -48,9 +48,8 @@ from app.agent.state import last_human_message
 from app.database import session_factory
 from app.llm_client import build_chat_model, extract_text_content
 from app.mcp.client import (
-    fetch_device_status,
-    get_ac_tools,
-    get_light_tools,
+    fetch_status_for_device,
+    get_domain_tools,
     query_all_devices,
 )
 from app.models import Device, HomeModeRecord, HomePolicy, Preference
@@ -110,22 +109,6 @@ def _traced(name: str):
         return _wrapped
 
     return _deco
-
-
-async def _fetch_status_for(device_type: str, device_id: int) -> dict:
-    """按设备域路由状态查询；域未接入时向上抛，由调用方离线兜底。
-
-    状态源口径：light → 通用 get_device_status；ac → 空调域
-    get_ac_status（第 6 步交付，交付前启动失败按离线兜底）。
-    """
-    if device_type == "ac":
-        tools = await get_ac_tools()
-        tool = {item.name: item for item in tools}.get("get_ac_status")
-        if tool is None:
-            return {"error": "ac 域状态工具 get_ac_status 不可用"}
-        result = await tool.ainvoke({"device_id": str(device_id)})
-        return result if isinstance(result, dict) else {"error": "MCP 返回结构异常"}
-    return await fetch_device_status(device_id)
 
 
 class HomeModeState(TypedDict):
@@ -304,7 +287,7 @@ async def _default_execute_action(action: dict) -> dict:
         return {"ok": False, "detail": f"动作 {action_id} 暂无执行器，已跳过"}
     domain, tool_name = spec
     try:
-        tools = await get_light_tools() if domain == "light" else await get_ac_tools()
+        tools = await get_domain_tools(domain)
         tool = {item.name: item for item in tools}.get(tool_name)
         if tool is None:
             return {"ok": False, "detail": f"{domain} 域工具 {tool_name} 不可用"}
@@ -332,7 +315,7 @@ def _build_state_loader():
         ]
         raw = await query_all_devices(
             device_dicts,
-            lambda device: _fetch_status_for(device["device_type"], device["id"]),
+            lambda device: fetch_status_for_device(device["device_type"], device["id"]),
         )
         states: dict[str, dict] = {}
         for device, status in zip(device_dicts, raw, strict=True):
@@ -542,7 +525,7 @@ def build_home_mode_graph(
         # 失败 / 超时的设备按未生效如实呈现，不静默成功。
         raw = await query_all_devices(
             readback_devices,
-            lambda device: _fetch_status_for(device["device_type"], device["id"]),
+            lambda device: fetch_status_for_device(device["device_type"], device["id"]),
         )
         readback_states: dict[str, dict] = {}
         for action, status in zip(device_planned, raw, strict=True):

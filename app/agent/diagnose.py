@@ -44,7 +44,11 @@ from app.agent.wording import apply_wording_filter as _apply_wording_filter
 from app.agent.wording import sanitize_prompt_text as _sanitize_prompt_text
 from app.database import session_factory
 from app.llm_client import build_chat_model, default_model_name
-from app.mcp.client import fetch_device_status, get_light_tools
+from app.mcp.client import (
+    QUERY_TIMEOUT_SECONDS,
+    fetch_status_for_device,
+    get_light_tools,
+)
 from app.models import (
     Device,
     DeviceEvent,
@@ -187,11 +191,13 @@ async def _load_domain_knowledge(domain: str) -> tuple[list, list[tuple[str, str
 
 
 async def _query_mcp_device_status(domain: str, device_id: int) -> dict | None:
-    """MVP 仅灯光域接入 MCP 状态查询；其他域工具随第 6 周域扩展补齐。"""
+    """诊断证据暂仅查灯光域；其他域等待知识库与排查规则接入后再启用。"""
     if domain != "light":
         return None
     try:
-        result = await fetch_device_status(device_id)
+        # 诊断是单设备查询，套用全局 MCP 超时，避免一台故障设备拖住整场排查。
+        async with asyncio.timeout(QUERY_TIMEOUT_SECONDS):
+            result = await fetch_status_for_device(domain, device_id)
     except asyncio.CancelledError as exc:
         # 单独捕获 CancelledError：它不是 Exception 子类；MCP 故障
         # 不能把诊断链路以取消形式打断。
