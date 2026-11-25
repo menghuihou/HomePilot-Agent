@@ -57,22 +57,22 @@ def setup_observability(app: FastAPI) -> Langfuse | None:
         resource=Resource.create({"service.name": settings.otel_service_name})
     )
 
-    langfuse_configured = bool(
-        settings.langfuse_public_key and settings.langfuse_secret_key
-    )
+    # SecretStr 恒为真值且 f-string 渲染为掩码：必须先显式取值再判空 /
+    # 拼接，否则空密钥也会走「已配置」分支、Basic 头会带上掩码而非真钥。
+    public_key = settings.langfuse_public_key.get_secret_value()
+    secret_key = settings.langfuse_secret_key.get_secret_value()
+    langfuse_configured = bool(public_key and secret_key)
     langfuse: Langfuse | None = None
     if langfuse_configured:
-        credentials = base64.b64encode(
-            f"{settings.langfuse_public_key}:{settings.langfuse_secret_key}".encode()
-        ).decode()
+        credentials = base64.b64encode(f"{public_key}:{secret_key}".encode()).decode()
         exporter = OTLPSpanExporter(
             endpoint=f"{settings.langfuse_host}/api/public/otel/v1/traces",
             headers={"Authorization": f"Basic {credentials}"},
         )
         provider.add_span_processor(BatchSpanProcessor(exporter))
         langfuse = Langfuse(
-            public_key=settings.langfuse_public_key,
-            secret_key=settings.langfuse_secret_key,
+            public_key=public_key,
+            secret_key=secret_key,
             host=settings.langfuse_host,
             tracer_provider=provider,
         )

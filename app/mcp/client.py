@@ -124,7 +124,9 @@ class McpToolClient:
                 result = await client.call_tool(tool_name, kwargs)
                 data = getattr(result, "data", None)
                 if data is None:
-                    data = result.content[0].text
+                    # content 可能为空列表（如工具返回空值）：取空串而非
+                    # IndexError，语义「无结构化数据」交由调用方降级。
+                    data = result.content[0].text if result.content else ""
                 if span.is_recording():
                     span.set_attribute(
                         "langfuse.observation.output", observation_payload(data)
