@@ -12,12 +12,12 @@ class GraphMemoryBackend:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> GraphMemoryBackend:
-        """配置校验在工厂阶段完成；缺失 endpoint 不创建对象。"""
+        """直接调用工厂方法时也必须显式失败，不创建假可用的对象。"""
         if not settings.graph_memory_endpoint:
-            from app.memory import MemoryBackendConfigError
+            from app.memory import MemoryBackendUnavailableError
 
-            raise MemoryBackendConfigError(
-                "MEMORY_BACKEND=graph 时必须配置 GRAPH_MEMORY_ENDPOINT"
+            raise MemoryBackendUnavailableError(
+                "graph memory endpoint is not configured"
             )
         return cls(settings.graph_memory_endpoint)
 

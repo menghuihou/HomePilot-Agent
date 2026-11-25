@@ -11,6 +11,7 @@ from app.memory import (
     GraphMemoryBackend,
     Mem0Backend,
     MemoryBackendConfigError,
+    MemoryBackendUnavailableError,
     build_memory_backend,
 )
 from app.schemas import (
@@ -32,6 +33,10 @@ def _settings(**overrides: str) -> Settings:
         **overrides,
     }
     return Settings(_env_file=None, **values)
+
+
+def _memory_item() -> MemoryItem:
+    return MemoryItem(scope=MemoryScope(home_id=1), key="theme", value="dark")
 
 
 def test_database_is_default_memory_backend():
@@ -64,6 +69,13 @@ def test_graph_backend_requires_endpoint():
         _settings(memory_backend="graph")
 
 
+def test_graph_factory_method_requires_endpoint_without_settings_validation():
+    with pytest.raises(
+        MemoryBackendUnavailableError, match="graph memory endpoint is not configured"
+    ):
+        GraphMemoryBackend.from_settings(_settings())
+
+
 def test_graph_backend_is_explicit_skeleton_when_configured():
     settings = _settings(
         memory_backend="graph", graph_memory_endpoint="http://graph.local"
@@ -75,6 +87,10 @@ def test_graph_backend_is_explicit_skeleton_when_configured():
     assert backend.endpoint == "http://graph.local"
     with pytest.raises(NotImplementedError, match="scheduled after week 7"):
         asyncio.run(backend.retrieve(query))
+    with pytest.raises(NotImplementedError, match="scheduled after week 7"):
+        asyncio.run(backend.store(_memory_item()))
+    with pytest.raises(NotImplementedError, match="scheduled after week 7"):
+        asyncio.run(backend.forget(query))
 
 
 def test_memory_item_rejects_empty_key_and_value():
