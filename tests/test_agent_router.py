@@ -249,8 +249,10 @@ def test_summarize_home_context_caps_devices_and_prefs():
     ]
 
     summary = summarize_home_context(context)
-    device_line = next(l for l in summary.splitlines() if l.startswith("设备："))
-    pref_line = next(l for l in summary.splitlines() if l.startswith("偏好："))
+    device_line = next(
+        line for line in summary.splitlines() if line.startswith("设备：")
+    )
+    pref_line = next(line for line in summary.splitlines() if line.startswith("偏好："))
 
     assert device_line.endswith("…等 60 台")
     assert "(id=50)" in device_line and "(id=51)" not in device_line

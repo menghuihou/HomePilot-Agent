@@ -18,13 +18,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 import app.agent.diagnose as diagnose_module
 from app.agent.diagnose import DiagnosisReport, SymptomSlots, build_diagnose_graph
 from app.config import get_settings
+from tests.helpers import cleanup_approvals as _cleanup_approvals
+from tests.helpers import conninfo as _conninfo
 from tests.test_agent_diagnose import (
     StubDiagnosisModel,
     _create_device,
     _scripted_investigator,
 )
-from tests.helpers import cleanup_approvals as _cleanup_approvals
-from tests.helpers import conninfo as _conninfo
 from tests.test_approvals_api import HIGH_RISK_SCRIPT
 
 
@@ -84,9 +84,7 @@ def test_postgres_checkpointer_resumes_across_restart(client, home_id):
             # 避免真实 app 池在测试循环内建连接、循环销毁后毒化后续用例。
             import app.agent.approval_flow as approval_flow_module
 
-            monkeypatch.setattr(
-                approval_flow_module, "session_factory", session_maker
-            )
+            monkeypatch.setattr(approval_flow_module, "session_factory", session_maker)
             try:
                 try:
                     config = {"configurable": {"thread_id": thread_id}}

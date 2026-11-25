@@ -159,8 +159,9 @@ def build_chat_graph(
                 continue
             try:
                 call_args = dict(call["args"])
+                state_dict = dict(state)
                 for field in (selected.metadata or {}).get(_STATE_INJECTION_KEY, ()):
-                    call_args[field] = state[field]
+                    call_args[field] = state_dict[field]
                 result = await selected.ainvoke(call_args)
                 outputs.append(
                     ToolMessage(content=str(result), tool_call_id=call["id"])
@@ -218,8 +219,11 @@ def build_agent_graph(
         return {"home_context": context}
 
     async def route(state: AgentState) -> dict:
+        # load_context 先于 route 执行：home_context 必已注入。
+        home_context = state["home_context"]
+        assert home_context is not None
         intent = await classify_intent(
-            state["messages"], state["home_context"], chat_model=router_model
+            state["messages"], home_context, chat_model=router_model
         )
         _route_observation(intent, state["home_id"])
         updates: dict = {"intent": intent}
@@ -228,7 +232,7 @@ def build_agent_graph(
             # 巡检子图才会把待确认操作与提醒拼进报告（确定性关键词，零 LLM）。
             human_message = last_human_message(state["messages"])
             report_type = detect_report_type(
-                human_message.content if human_message else ""
+                extract_text_content(human_message.content) if human_message else ""
             )
             updates["report_type"] = report_type
         return updates
@@ -265,9 +269,12 @@ def build_agent_graph(
         return reply
 
     def direct_reply(state: AgentState) -> dict:
+        # load_context 先行：home_context 必已注入。
+        home_context = state["home_context"]
+        assert home_context is not None
         reply = _direct_reply_observation(
             state["intent"],
-            reply_for_intent(state["intent"], state["home_context"]) or "",
+            reply_for_intent(state["intent"], home_context) or "",
         )
         return {
             "answer": reply,

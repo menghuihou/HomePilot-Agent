@@ -196,9 +196,10 @@ def plan_mode_transition(
         # 主变化字段决定动作标识；动作携带完整目标，供 MCP 一次下发。
         primary = min(changed, key=_primary_sort_key)
         action_id = _action_id(device_type, primary[0], primary[1])
+        device_name = str(state.get("name") or "")
         action, out_of_scope = _graded_action(
             device_id,
-            state.get("name"),
+            device_name,
             device_type,
             action_id,
             target,
@@ -208,6 +209,7 @@ def plan_mode_transition(
         if action is not None:
             planned.append(action)
         else:
+            assert out_of_scope is not None
             blocked.append(out_of_scope)
 
     lock_rule = policy.get("lock")
@@ -224,6 +226,7 @@ def plan_mode_transition(
         if action is not None:
             planned.append(action)
         else:
+            assert out_of_scope is not None
             blocked.append(out_of_scope)
     return planned, blocked
 

@@ -1,8 +1,6 @@
 """wording 共享件测试：prompt 输入侧净化与输出侧断言词过滤。"""
 
-import app.agent.wording as wording
 from app.agent.wording import filter_assertions, sanitize_prompt_text
-
 
 # ---------- sanitize_prompt_text：输入侧注入面净化 ----------
 

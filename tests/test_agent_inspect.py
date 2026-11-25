@@ -9,7 +9,6 @@ import time
 import uuid
 from datetime import UTC, datetime, timedelta
 
-import psycopg
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -30,9 +29,9 @@ from app.agent.inspect import (
     sort_anomalies,
 )
 from app.config import get_settings
-
-
 from tests.helpers import db_execute as _db_execute
+
+
 @pytest.fixture()
 def inspect_home():
     """创建临时家庭与 2 台设备；测试后按外键依赖顺序清理。"""

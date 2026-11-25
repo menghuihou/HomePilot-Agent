@@ -10,7 +10,6 @@ import asyncio
 import uuid
 from types import SimpleNamespace
 
-import psycopg
 import pytest
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
@@ -32,11 +31,12 @@ from app.config import BASE_DIR, get_settings
 from app.main import application
 from app.mcp.client import McpToolClient
 from app.routers import chat as chat_api
+from tests.helpers import cleanup_approvals as _cleanup_approvals
+from tests.helpers import db_execute as _db_execute
 from tests.test_agent_chat import StubChatModel, StubRouterModel
 from tests.test_chat_api import _parse_sse
 
 
-from tests.helpers import db_execute as _db_execute, cleanup_approvals as _cleanup_approvals
 def _seed_policy(home_id: int, mode: str, rules: dict) -> None:
     _db_execute(
         """

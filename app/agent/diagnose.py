@@ -12,7 +12,7 @@ import asyncio
 import json
 import logging
 import operator
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
@@ -131,7 +131,7 @@ class DiagnosisReport(BaseModel):
     primary_cause_key: str | None = None
 
 
-def _format_symptom_dictionary(rows: list[FaultSymptom]) -> str:
+def _format_symptom_dictionary(rows: Sequence[FaultSymptom]) -> str:
     """把症状字典按设备域分组压缩成 prompt 可读的文本。"""
     groups: dict[str, list[str]] = {}
     for row in rows:
@@ -282,7 +282,10 @@ def _registers(action: str):
 @_registers("restart_gateway")
 async def _execute_restart_gateway(diagnosis: dict) -> str:
     """重启网关：网关 id 从业务库按家庭解析，传入 MCP 工具。"""
-    gateway_id = await _home_gateway_device_id(diagnosis.get("home_id"))
+    home_id = diagnosis.get("home_id")
+    if home_id is None:
+        return "执行失败：缺少 home_id 上下文，无法定位网关，请人工处理"
+    gateway_id = await _home_gateway_device_id(home_id)
     if gateway_id is None:
         return "执行失败：当前家庭未配置网关设备，请人工处理"
     tools = {tool.name: tool for tool in await get_light_tools()}
@@ -467,7 +470,9 @@ def _resolve_symptom(
     domain = DOMAIN_BY_DEVICE_TYPE.get(device["device_type"], "") if device else ""
     known_keys = valid_keys.get(domain, set())
     fallback = slots is None or domain == "" or slots.symptom_key not in known_keys
-    symptom_key = FALLBACK_SYMPTOM_KEY if fallback else slots.symptom_key
+    symptom_key = (
+        FALLBACK_SYMPTOM_KEY if fallback or slots is None else slots.symptom_key
+    )
     if fallback:
         # 当前观测是 span（非 generation），用 update_current_span 打兜底标记。
         get_client().update_current_span(
@@ -566,7 +571,7 @@ def build_diagnose_graph(
         else:
             device_list = (
                 "、".join(
-                    f"{_sanitize_prompt_text(d['name'])}"
+                    f"{_sanitize_prompt_text(str(d['name']))}"
                     f"(id={d['id']}, {d['device_type']})"
                     for d in device_dicts
                 )

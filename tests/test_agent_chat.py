@@ -19,9 +19,9 @@ from app.agent.chat import build_agent_graph, build_chat_graph, record_preferenc
 from app.agent.inspect import build_inspect_graph
 from app.agent.router import RouterDecision, classify_intent
 from app.config import get_settings
-
-
 from tests.helpers import conninfo as _conninfo
+
+
 class StubRouterModel:
     """固定意图的结构化输出桩。
 

@@ -98,8 +98,10 @@ class McpToolClient:
                 cwd=str(self._cwd),
             )
             self._client = await self._stack.enter_async_context(Client(transport))
-            mcp_tools = await self._client.list_tools()
-            self._tools = [self._convert(tool) for tool in mcp_tools]
+            client = self._client
+            assert client is not None
+            mcp_tools = await client.list_tools()
+            self._tools = [self._convert(client, tool) for tool in mcp_tools]
             logger.info(
                 "MCP 动态发现 %d 个工具：%s",
                 len(self._tools),
@@ -107,8 +109,7 @@ class McpToolClient:
             )
             return self._tools
 
-    def _convert(self, mcp_tool) -> BaseTool:
-        client = self._client
+    def _convert(self, client: Client, mcp_tool) -> BaseTool:
         tool_name = mcp_tool.name
 
         async def _acall(**kwargs):
@@ -217,7 +218,7 @@ async def _query_one(fetcher, device: dict, timeout_seconds: float) -> dict:
             "name": device["name"],
             "error": f"查询超时（>{timeout_seconds:.0f} 秒）",
         }
-    except Exception as exc:  # noqa: BLE001 —— 任何 MCP 调用故障都降级为单设备失败
+    except Exception as exc:
         return {
             "device_id": device["id"],
             "name": device["name"],
@@ -265,8 +266,8 @@ async def query_all_devices(
 
 
 __all__ = [
-    "McpToolClient",
     "QUERY_TIMEOUT_SECONDS",
+    "McpToolClient",
     "ac_mcp_client",
     "fetch_device_status",
     "get_ac_tools",

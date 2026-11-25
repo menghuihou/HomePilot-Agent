@@ -79,7 +79,7 @@ def _current_trace_id() -> str:
     """
     try:
         trace_id = get_client().get_current_trace_id() or ""
-    except Exception:  # noqa: BLE001
+    except Exception:
         trace_id = ""
     if trace_id:
         return trace_id

@@ -45,7 +45,10 @@ def observation_payload(value: Any) -> str:
     """span 入参/出参序列化：JSON 为主，极端对象（循环引用等）回退 repr。"""
     try:
         return json.dumps(value, ensure_ascii=False, default=observation_value)
-    except (TypeError, ValueError):
+    except TypeError:
+        return repr(value)
+    except ValueError:
+        # json.dumps 的 default 钩子抛 ValueError（循环引用等）：同样回退 repr。
         return repr(value)
 
 

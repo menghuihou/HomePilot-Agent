@@ -23,9 +23,9 @@ from app.agent.diagnose import (
 )
 from app.agent.wording import filter_assertions as _filter_assertions
 from app.config import get_settings
-
-
 from tests.helpers import conninfo as _conninfo
+
+
 class StubExtractionModel:
     """固定槽位的结构化输出桩；slots=None 模拟 LLM 未返回结构化结果。"""
 

@@ -8,16 +8,14 @@
 import asyncio
 import uuid
 
-import psycopg
 import pytest
 from fastmcp import Client
 from psycopg.types.json import Json
 
-from app.config import get_settings
 from mcp_servers import light_server
-
-
 from tests.helpers import db_execute as _db_execute
+
+
 @pytest.fixture()
 def seeded_home():
     """创建临时家庭；测试后按外键依赖顺序清理。"""

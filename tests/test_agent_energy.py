@@ -3,7 +3,6 @@
 import asyncio
 import uuid
 
-import psycopg
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -12,12 +11,12 @@ import app.agent.energy as energy_module
 from app.agent.chat import build_agent_graph
 from app.agent.energy import aggregate_energy, build_energy_graph
 from app.config import get_settings
+from tests.helpers import db_execute as _db_execute
 from tests.test_agent_chat import StubChatModel, StubRouterModel
 
 DIM = 1024
 
 
-from tests.helpers import db_execute as _db_execute
 @pytest.fixture()
 def energy_home():
     """临时家庭 + 2 台空调 + 8 条能耗事件；结束按外键顺序清理。"""

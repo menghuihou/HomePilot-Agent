@@ -6,6 +6,7 @@ chat 交给 chat 子图。
 """
 
 import logging
+from collections.abc import Sequence
 from typing import Literal
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
@@ -76,10 +77,7 @@ def summarize_home_context(context: HomeContext) -> str:
     ]
     lines.append(
         "房间："
-        + (
-            "、".join(sanitize_prompt_text(room.name) for room in context.rooms)
-            or "无"
-        )
+        + ("、".join(sanitize_prompt_text(room.name) for room in context.rooms) or "无")
     )
     lines.append(
         "成员："
@@ -109,22 +107,20 @@ def summarize_home_context(context: HomeContext) -> str:
     return "\n".join(lines)
 
 
-def _dialog_window(messages: list[BaseMessage]) -> list[BaseMessage]:
+def _dialog_window(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
     """Router 可见窗口：只保留有正文的 human/ai 消息。
 
     过滤 ToolMessage 与空正文的 tool_calls AI 消息，避免窗口从中间截断后
     以 tool_result 或 assistant 开头被 Anthropic 协议拒绝（首条消息必须是
     user role，tool 消息必须紧跟对应 tool_use），静默降级 chat。
     """
-    dialog = [
-        m
-        for m in messages
-        if getattr(m, "type", "") in ("human", "ai") and getattr(m, "content", "")
-    ]
+    dialog = [m for m in messages if m.type in ("human", "ai") and m.content]
     return dialog[-_CONTEXT_WINDOW:]
 
 
-def _merge_consecutive_humans(messages: list[BaseMessage]) -> list[BaseMessage]:
+def _merge_consecutive_humans(
+    messages: Sequence[BaseMessage],
+) -> list[BaseMessage]:
     """合并窗口内连续 human 消息。
 
     用户连发多条或直答占位间隔后的历史会形成连续 human 序列，部分网关
@@ -158,7 +154,7 @@ async def _invoke_router(chat_model, prompt_messages: list) -> RouterDecision | 
 
 
 async def classify_intent(
-    messages: list[BaseMessage],
+    messages: Sequence[BaseMessage],
     home_context: HomeContext,
     chat_model=None,
 ) -> str:

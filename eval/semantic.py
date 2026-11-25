@@ -54,7 +54,7 @@ def _current_trace_id() -> str:
             from langfuse import get_client
 
             return get_client().get_current_trace_id() or ""
-    except Exception:  # noqa: BLE001 —— 观测未配置时静默降级为空 trace id
+    except Exception:
         return ""
 
 
@@ -165,7 +165,7 @@ def _g_eval(row: dict[str, Any]) -> dict[str, Any]:
             "model": JUDGE_NAME,
             "trace_id": _current_trace_id(),
         }
-    except Exception as exc:  # noqa: BLE001 —— judge 失败降级为该例不通过
+    except Exception as exc:
         return _judge_error(exc)
 
 
@@ -195,7 +195,7 @@ def _faithfulness(row: dict[str, Any]) -> dict[str, Any]:
             "model": JUDGE_NAME,
             "trace_id": _current_trace_id(),
         }
-    except Exception as exc:  # noqa: BLE001 —— judge 失败降级为该例不通过
+    except Exception as exc:
         return _judge_error(exc)
 
 

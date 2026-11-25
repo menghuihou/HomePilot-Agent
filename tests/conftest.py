@@ -18,8 +18,6 @@ os.environ["LANGFUSE_SECRET_KEY"] = ""
 os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 
 from app.main import application
-
-
 from tests.helpers import conninfo as _sync_conninfo
 
 

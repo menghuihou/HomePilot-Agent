@@ -44,4 +44,5 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    # database_url / database_url_sync 由环境变量提供，静态检查不可见。
+    return Settings()  # type: ignore[call-arg]

@@ -12,9 +12,9 @@ from fastmcp import Client
 from psycopg.types.json import Json
 
 from mcp_servers import ac_server
-
-
 from tests.helpers import db_execute as _db_execute
+
+
 @pytest.fixture()
 def seeded_home():
     """创建临时家庭；测试后按外键依赖顺序清理。"""

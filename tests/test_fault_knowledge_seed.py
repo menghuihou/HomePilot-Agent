@@ -8,6 +8,7 @@ from pathlib import Path
 import psycopg
 import pytest
 
+from tests.helpers import conninfo as _conninfo
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "db" / "seeds" / "data"
@@ -17,7 +18,6 @@ EXPECTED_DEVICE_TYPES = {"light", "ac", "sensor", "gateway"}
 CAUSE_TOTAL_RANGE = (200, 300)
 
 
-from tests.helpers import conninfo as _conninfo
 def _load_knowledge() -> subprocess.CompletedProcess[str]:
     """以子进程方式执行真实导入命令，覆盖文档中的调用路径。"""
     return subprocess.run(

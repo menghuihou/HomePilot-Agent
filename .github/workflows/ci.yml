@@ -64,6 +64,7 @@ jobs:
         run: |
           uv run ruff check .
           uv run ruff format --check .
+          uv run mypy app mcp_servers
       - name: 测试（单元 + 确定性 golden 集）
         run: uv run pytest -q
 

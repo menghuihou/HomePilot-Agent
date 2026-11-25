@@ -69,9 +69,7 @@ def _patch_models(
         default_role="light",
         roles={
             "light": SimpleNamespace(
-                fallback=SimpleNamespace(model="fallback-model")
-                if fallback
-                else None
+                fallback=SimpleNamespace(model="fallback-model") if fallback else None
             )
         },
     )

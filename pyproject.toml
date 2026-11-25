@@ -29,6 +29,7 @@ default = true
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "mypy>=2.4.1",
     "pytest>=9.2.0",
     "ruff>=0.17.2",
 ]
@@ -56,3 +57,32 @@ filterwarnings = [
     "ignore:'asyncio\\.iscoroutinefunction' is deprecated:DeprecationWarning:deepeval\\.tracing\\.tracing",
     "ignore:'asyncio\\.iscoroutinefunction' is deprecated:DeprecationWarning:langsmith",
 ]
+
+[tool.ruff]
+# 行长交给 ruff format 管理（格式化不折行字符串，故 lint 不选 E501）。
+target-version = "py314"
+
+[tool.ruff.lint]
+# E/F：pycodestyle 错误与 pyflakes；I：导入排序；B：常见 bug 模式；
+# RUF022/RUF100：__all__ 排序与 noqa 有效性。
+# ASYNC：异步陷阱（阻塞调用混入事件循环 / time.sleep 等）——
+# 本项目重度依赖 asyncio + MCP + LangGraph，值得专项看护。
+# UP：requires-python >= 3.14，自动淘汰陈旧写法。
+# W：pycodestyle 告警（尾随空白 / 缺 EOF 换行 / 非法转义）。
+# 不选 RUF001-003：中文注释/字符串的歧义字符误报（本项目注释主体是中文）。
+# E501 交给 ruff format 管理（格式化不折行字符串/注释，行长检查冗余）。
+select = ["E", "F", "I", "B", "ASYNC", "UP", "W", "RUF022", "RUF100"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# 部分测试刻意让环境变量 / 模块常量先于导入生效（Langfuse 置空等）。
+"tests/conftest.py" = ["E402"]
+"tests/test_seed_data.py" = ["E402"]
+
+[tool.mypy]
+python_version = "3.14"
+# mcp_servers 是独立进程的核心外部运行时，与 app 同批纳入类型检查。
+files = ["app", "mcp_servers"]
+# 起步基线：只检查带类型注解的代码路径，避免历史代码一次性爆出
+# 数百条噪声；后续逐步开启 check_untyped_defs 收紧。
+ignore_missing_imports = true

@@ -50,9 +50,7 @@ class ModelsConfig(BaseModel):
         if self.default_role not in self.roles:
             # ModelsConfigError 是 _load_models_config_safe 的捕获范围：
             # 坏 yaml 走降级路径而非崩溃。
-            raise ModelsConfigError(
-                f"default_role '{self.default_role}' 不在 roles 中"
-            )
+            raise ModelsConfigError(f"default_role '{self.default_role}' 不在 roles 中")
         return self
 
 
@@ -156,9 +154,8 @@ async def invoke_with_fallback(messages: list, config=None):
         logger.warning("主模型调用失败，降级 fallback", exc_info=True)
 
     config_obj = _load_models_config_safe()
-    fallback_model = (
-        config_obj.roles.get(config_obj.default_role).fallback if config_obj else None
-    )
+    role = config_obj.roles.get(config_obj.default_role) if config_obj else None
+    fallback_model = role.fallback if role else None
     if not fallback_model:
         return AIMessage(content="")
     try:

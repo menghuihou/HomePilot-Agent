@@ -1,14 +1,15 @@
 """主图共享状态：Router 与各子图共用的数据结构。"""
 
+from collections.abc import Sequence
 from typing import Annotated, TypedDict
 
-from langchain_core.messages import AnyMessage
+from langchain_core.messages import AnyMessage, BaseMessage
 from langgraph.graph.message import add_messages
 
 from app.agent.context import HomeContext
 
 
-def last_human_message(messages: list[AnyMessage]) -> AnyMessage | None:
+def last_human_message(messages: Sequence[BaseMessage]) -> BaseMessage | None:
     """取最新一条用户消息；Router 分类与诊断抽取都只针对它。"""
     for message in reversed(messages):
         if getattr(message, "type", "") == "human":

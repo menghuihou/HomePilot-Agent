@@ -8,6 +8,7 @@ from pathlib import Path
 import psycopg
 
 from app.agent.anomaly_rules import OFFLINE_TIMEOUT
+from tests.helpers import conninfo as _conninfo
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -28,7 +29,6 @@ SEED_POLICY_MODES = ("home", "away", "night", "sleep")
 SEED_AC_DEVICE_NAMES = ("书房空调", "客厅空调")
 
 
-from tests.helpers import conninfo as _conninfo
 def _load_seed() -> subprocess.CompletedProcess[str]:
     """以子进程方式执行真实种子命令，覆盖文档中的调用路径。"""
     return subprocess.run(

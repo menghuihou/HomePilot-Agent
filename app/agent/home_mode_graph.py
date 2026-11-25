@@ -26,12 +26,12 @@ from opentelemetry.trace import get_tracer
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from app.agent.context import DEFAULT_HOME_MODE, HOME_MODE_KEY
 from app.agent.approval_flow import (
     approval_allows_execution,
     ensure_pending_approval,
     record_approval_decision,
 )
+from app.agent.context import DEFAULT_HOME_MODE, HOME_MODE_KEY
 from app.agent.home_mode import (
     # 确定性核心全部来自纯函数模块；_device_id_for_risk 供 gate 复审
     # 代表性高风险动作时复用同一 id 归一口径。
@@ -298,7 +298,7 @@ async def _default_execute_action(action: dict) -> dict:
     MCP Server 返回结构化错误（dict 带 error）也视为失败——不冒充成功，
     失败动作由 readback 转入未完成清单如实呈现。
     """
-    action_id = action.get("action")
+    action_id = str(action.get("action") or "")
     spec = _ACTION_TOOL_BY_ID.get(action_id)
     if spec is None:
         return {"ok": False, "detail": f"动作 {action_id} 暂无执行器，已跳过"}
@@ -328,8 +328,7 @@ def _build_state_loader():
 
     async def _fetch_states(devices: list[Device]) -> dict[str, dict]:
         device_dicts = [
-            {"id": d.id, "name": d.name, "device_type": d.device_type}
-            for d in devices
+            {"id": d.id, "name": d.name, "device_type": d.device_type} for d in devices
         ]
         raw = await query_all_devices(
             device_dicts,
@@ -549,9 +548,7 @@ def build_home_mode_graph(
         for action, status in zip(device_planned, raw, strict=True):
             device_id = str(action["device_id"])
             if "error" in status:
-                logger.warning(
-                    "回读设备 %s 状态失败：%s", device_id, status["error"]
-                )
+                logger.warning("回读设备 %s 状态失败：%s", device_id, status["error"])
                 status = {}
             if "brightness" in status:
                 status = {**status, "power": status["brightness"] > 0}

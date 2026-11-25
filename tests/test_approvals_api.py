@@ -25,6 +25,8 @@ from app.agent.diagnose import DiagnosisReport, SymptomSlots, build_diagnose_gra
 from app.agent.risk_rules import RiskRule
 from app.config import get_settings
 from app.main import application
+from tests.helpers import cleanup_approvals as _cleanup_approvals
+from tests.helpers import conninfo as _conninfo
 from tests.test_agent_chat import StubRouterModel
 from tests.test_agent_diagnose import (
     StubDiagnosisModel,
@@ -40,7 +42,6 @@ HIGH_RISK_SCRIPT = {
 }
 
 
-from tests.helpers import conninfo as _conninfo, cleanup_approvals as _cleanup_approvals
 def _approval_rows(thread_id: str) -> list[tuple]:
     """返回该会话的审批审计行（decision, action, risk_level）。"""
     with psycopg.connect(_conninfo()) as conn, conn.cursor() as cur:

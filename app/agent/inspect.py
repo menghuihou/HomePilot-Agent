@@ -38,6 +38,7 @@ from app.agent import anomaly_rules as rules
 from app.agent.wording import apply_wording_filter as _apply_wording_filter
 from app.database import session_factory
 from app.llm_client import default_model_name
+
 # 并发查询原语与超时常量归位 MCP 基础设施层（home_mode 子图共用）。
 from app.mcp.client import QUERY_TIMEOUT_SECONDS, fetch_device_status, query_all_devices
 from app.models import Approval, Device, InspectionReport
@@ -303,7 +304,7 @@ def _make_llm_summarizer(model):
         ]
         try:
             report = await _invoke_summary(model, messages)
-        except Exception:  # noqa: BLE001 —— LLM 任何故障都降级，巡检能力不受影响
+        except Exception:
             return _fallback_summary("llm_error", total, normal, anomalies)
 
         text = report.summary_text.strip() if report and report.summary_text else ""
