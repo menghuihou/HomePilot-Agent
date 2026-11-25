@@ -1,17 +1,21 @@
 from datetime import datetime
+from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
+    Identity,
     Integer,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -390,6 +394,75 @@ class HomeModeRecord(Base):
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     synthetic: Mapped[bool] = mapped_column(default=True)
     source_type: Mapped[str] = mapped_column(String(20), default="synthetic")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class KnowledgeSource(Base):
+    """知识来源：一份按设备域和版本管理的故障知识文档。"""
+
+    __tablename__ = "knowledge_sources"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_key", "knowledge_version", name="uq_knowledge_sources_key"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(160))
+    title: Mapped[str] = mapped_column(String(200))
+    device_type: Mapped[str] = mapped_column(String(30))
+    brand: Mapped[str | None] = mapped_column(String(80))
+    model: Mapped[str | None] = mapped_column(String(80))
+    knowledge_version: Mapped[str] = mapped_column(String(30))
+    synthetic: Mapped[bool] = mapped_column(default=True)
+    source_type: Mapped[str] = mapped_column(String(20), default="seed")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class KnowledgeChunk(Base):
+    """知识块：RAG 检索的最小单元，支持 dense / FTS / trigram / metadata 召回。
+
+    ``metadata`` 是 PostgreSQL 列名；ORM 属性改用 ``chunk_metadata``，
+    避免与 SQLAlchemy Declarative 的保留属性冲突。
+    """
+
+    __tablename__ = "knowledge_chunks"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'retired')", name="ck_knowledge_chunks_status"
+        ),
+        UniqueConstraint(
+            "source_id",
+            "chunk_key",
+            "knowledge_version",
+            name="uq_knowledge_chunks_key",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=True), primary_key=True)
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("knowledge_sources.id", ondelete="CASCADE")
+    )
+    knowledge_version: Mapped[str] = mapped_column(String(30))
+    chunk_key: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(String(200))
+    chunk_text: Mapped[str] = mapped_column(Text)
+    search_text: Mapped[str] = mapped_column(Text)
+    search_tsv: Mapped[Any] = mapped_column(TSVECTOR)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1024))
+    chunk_metadata: Mapped[dict] = mapped_column("metadata", JSONB)
+    chunk_hash: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="active")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
