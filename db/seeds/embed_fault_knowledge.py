@@ -11,65 +11,27 @@ EMBEDDING_ENABLED=false 时只写关键词与结构化索引字段；true 时按
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
 
 import httpx
 from sqlalchemy import func, insert, select
 
-from app.config import Settings, get_settings
+from app.config import get_settings
 from app.database import session_factory
 from app.knowledge.chunker import (
     KnowledgeChunkSeed,
     generate_domain_chunks,
     load_fault_knowledge_domains,
 )
+from app.knowledge.embedding import EmbeddingBackend, OpenAIEmbeddingBackend
 from app.models import KnowledgeChunk, KnowledgeSource
 
 logger = logging.getLogger(__name__)
 EMBED_BATCH_SIZE = 32
-EmbedDocuments = Callable[[list[str]], Awaitable[list[list[float]]]]
-
-
-async def _http_embed_documents(
-    texts: list[str], settings: Settings
-) -> list[list[float]]:
-    """调用 OpenAI 兼容 embeddings API；不记录请求头或响应正文。"""
-    response = await httpx.AsyncClient(timeout=settings.embedding_timeout_seconds).post(
-        f"{settings.embedding_base_url.rstrip('/')}/embeddings",
-        headers={
-            "Authorization": f"Bearer {settings.embedding_api_key.get_secret_value()}"
-        },
-        json={"model": settings.embedding_model, "input": texts},
-    )
-    response.raise_for_status()
-    payload = response.json()
-    items = payload.get("data")
-    if not isinstance(items, list) or len(items) != len(texts):
-        raise ValueError("embedding response item count does not match request")
-    vectors: list[list[float]] | None = None
-    for item in items:
-        index = item.get("index")
-        vector = item.get("embedding")
-        if not isinstance(index, int) or not 0 <= index < len(texts):
-            raise ValueError("embedding response index is invalid")
-        if not isinstance(vector, list):
-            raise ValueError("embedding response vector is invalid")
-        if len(vector) != settings.embedding_dim:
-            raise ValueError(
-                f"embedding dimension mismatch: expected {settings.embedding_dim}, "
-                f"got {len(vector)}"
-            )
-        if vectors is None:
-            vectors = [[] for _ in texts]
-        vectors[index] = vector
-    if vectors is None:
-        raise ValueError("embedding response has no vectors")
-    return vectors
 
 
 async def _embed_items(
     items: list[tuple[int, KnowledgeChunkSeed]],
-    settings: Settings,
+    embedding_backend: EmbeddingBackend,
 ) -> tuple[dict[int, list[float]], int]:
     """批量生成缺失向量；一批失败时保留 chunk，仅计入失败数量。"""
     if not items:
@@ -80,8 +42,8 @@ async def _embed_items(
     for start in range(0, len(items), EMBED_BATCH_SIZE):
         batch = items[start : start + EMBED_BATCH_SIZE]
         try:
-            vectors = await _http_embed_documents(
-                [chunk.chunk_text for _, chunk in batch], settings
+            vectors = await embedding_backend.embed_documents(
+                [chunk.chunk_text for _, chunk in batch]
             )
         except Exception as exc:
             logger.warning(
@@ -100,6 +62,12 @@ async def _embed_items(
 async def _seed(knowledge_version: str) -> None:
     """执行当前版本全量重放。"""
     settings = get_settings()
+    embedding_client: httpx.AsyncClient | None = None
+    embedding_backend: EmbeddingBackend | None = None
+    if settings.embedding_enabled:
+        # 持久 client：多批次共用 HTTP 连接池，避免每批重建连接。
+        embedding_client = httpx.AsyncClient(timeout=settings.embedding_timeout_seconds)
+        embedding_backend = OpenAIEmbeddingBackend(settings, client=embedding_client)
     domains = load_fault_knowledge_domains()
     source_inserted = 0
     source_updated = 0
@@ -174,7 +142,7 @@ async def _seed(knowledge_version: str) -> None:
             await session.flush()
             if settings.embedding_enabled:
                 new_embeddings, embedded_count = await _embed_items(
-                    pending_embedding, settings
+                    pending_embedding, embedding_backend
                 )
                 embeddings_succeeded += embedded_count
                 embedding_failed += len(pending_embedding) - embedded_count
@@ -186,7 +154,7 @@ async def _seed(knowledge_version: str) -> None:
                     (item_id, chunk) for item_id, _, chunk in missing_embedding
                 ]
                 retained_embeddings, embedded_count = await _embed_items(
-                    retained_targets, settings
+                    retained_targets, embedding_backend
                 )
                 embeddings_succeeded += embedded_count
                 embedding_failed += len(retained_targets) - embedded_count
@@ -215,6 +183,9 @@ async def _seed(knowledge_version: str) -> None:
                 )
 
         await session.commit()
+
+    if embedding_client is not None:
+        await embedding_client.aclose()
 
     print(
         f"knowledge seed version={knowledge_version} "
