@@ -33,9 +33,9 @@ class KnowledgeRetrievalStats:
 
 
 def _hit(
-        chunk: KnowledgeChunk,
-        source: KnowledgeSource,
-        score: float,
+    chunk: KnowledgeChunk,
+    source: KnowledgeSource,
+    score: float,
 ) -> RetrievalHit:
     """把 ORM 行转换为带完整 citation 的检索项。"""
     metadata = dict(chunk.chunk_metadata)
@@ -57,10 +57,10 @@ def _hit(
 
 
 def _base_filters(
-        chunk: Any,
-        source: Any,
-        device_type: str,
-        knowledge_version: str,
+    chunk: Any,
+    source: Any,
+    device_type: str,
+    knowledge_version: str,
 ) -> list[Any]:
     """所有通道共享的强制权限与版本过滤，不允许调用方覆盖。"""
     return [
@@ -77,13 +77,13 @@ def _contains(value: str) -> str:
 
 
 async def _structured_recall(
-        session_factory: async_sessionmaker[AsyncSession],
-        query: str,
-        device_type: str,
-        knowledge_version: str,
-        symptom_keys: list[str] | None,
-        cause_keys: list[str] | None,
-        limit: int,
+    session_factory: async_sessionmaker[AsyncSession],
+    query: str,
+    device_type: str,
+    knowledge_version: str,
+    symptom_keys: list[str] | None,
+    cause_keys: list[str] | None,
+    limit: int,
 ) -> list[ScoredHit]:
     """按已验证 symptom / cause key 反查知识 chunk。"""
     keys = symptom_keys
@@ -106,7 +106,10 @@ async def _structured_recall(
         conditions.append(KnowledgeChunk.chunk_metadata["symptom_keys"].contains(keys))
     if cause_keys:
         conditions.extend(
-            [KnowledgeChunk.chunk_metadata["cause_key"] == key for key in cause_keys]
+            [
+                KnowledgeChunk.chunk_metadata["cause_key"].as_string() == key
+                for key in cause_keys
+            ]
         )
     if not conditions:
         return []
@@ -140,11 +143,11 @@ async def _structured_recall(
 
 
 async def _keyword_recall(
-        session_factory: async_sessionmaker[AsyncSession],
-        query: str,
-        device_type: str,
-        knowledge_version: str,
-        limit: int,
+    session_factory: async_sessionmaker[AsyncSession],
+    query: str,
+    device_type: str,
+    knowledge_version: str,
+    limit: int,
 ) -> list[ScoredHit]:
     """使用全文检索，型号 / 错误码 / 动作词再通过 ILIKE 兜底。"""
     ts_query = func.websearch_to_tsquery("simple", query)
@@ -183,12 +186,12 @@ async def _keyword_recall(
 
 
 async def _dense_recall(
-        session_factory: async_sessionmaker[AsyncSession],
-        query: str,
-        device_type: str,
-        knowledge_version: str,
-        embedding_backend: EmbeddingBackend,
-        limit: int,
+    session_factory: async_sessionmaker[AsyncSession],
+    query: str,
+    device_type: str,
+    knowledge_version: str,
+    embedding_backend: EmbeddingBackend,
+    limit: int,
 ) -> list[ScoredHit]:
     """使用 pgvector cosine 距离召回；无向量的 chunk 不参与。"""
     query_vector = await embedding_backend.embed_query(query)
@@ -224,15 +227,15 @@ async def _dense_recall(
 
 
 async def search_fault_knowledge_detail(
-        query: str,
-        device_type: str,
-        *,
-        symptom_keys: list[str] | None = None,
-        cause_keys: list[str] | None = None,
-        knowledge_version: str | None = None,
-        top_k: int = 4,
-        embedding_backend: EmbeddingBackend | None = None,
-        session_factory: async_sessionmaker[AsyncSession] | None = None,
+    query: str,
+    device_type: str,
+    *,
+    symptom_keys: list[str] | None = None,
+    cause_keys: list[str] | None = None,
+    knowledge_version: str | None = None,
+    top_k: int = 4,
+    embedding_backend: EmbeddingBackend | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> tuple[RetrievalResult, KnowledgeRetrievalStats]:
     """执行三路召回、RRF 融合；通道失败时降级并记录 fallback 标签。"""
     if not query.strip():
@@ -310,15 +313,15 @@ async def search_fault_knowledge_detail(
 
 
 async def search_fault_knowledge(
-        query: str,
-        device_type: str,
-        *,
-        symptom_keys: list[str] | None = None,
-        cause_keys: list[str] | None = None,
-        knowledge_version: str | None = None,
-        top_k: int = 4,
-        embedding_backend: EmbeddingBackend | None = None,
-        session_factory: async_sessionmaker[AsyncSession] | None = None,
+    query: str,
+    device_type: str,
+    *,
+    symptom_keys: list[str] | None = None,
+    cause_keys: list[str] | None = None,
+    knowledge_version: str | None = None,
+    top_k: int = 4,
+    embedding_backend: EmbeddingBackend | None = None,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
 ) -> RetrievalResult:
     """三路混合检索入口；返回值与 citations 结构完全一致。"""
     result, _ = await search_fault_knowledge_detail(

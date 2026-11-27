@@ -225,7 +225,7 @@ def test_advice_action_without_interrupt_or_record(client, home_id):
         approval = result["final_diagnosis"]["approval"]
         assert approval["decision"] == "advice"
         assert result["final_diagnosis"]["risk_level"] == "low"
-        assert result["final_diagnosis"]["report"] == "可能是停电了。"
+        assert result["final_diagnosis"]["report"].startswith("可能是停电了。")
         rows = _approval_rows(thread_id)
         assert not rows, "人工建议类动作不应产生审批记录"
     finally:

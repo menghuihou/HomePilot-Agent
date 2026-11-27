@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import operator
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Annotated, TypedDict
 
@@ -42,7 +43,13 @@ from app.agent.risk_rules import judge_risk
 from app.agent.state import last_human_message
 from app.agent.wording import apply_wording_filter as _apply_wording_filter
 from app.agent.wording import sanitize_prompt_text as _sanitize_prompt_text
+from app.config import get_settings
 from app.database import session_factory
+from app.knowledge.embedding import OpenAIEmbeddingBackend
+from app.knowledge.repository import (
+    KnowledgeRetrievalStats,
+    search_fault_knowledge_detail,
+)
 from app.llm_client import build_chat_model, default_model_name
 from app.mcp.client import (
     QUERY_TIMEOUT_SECONDS,
@@ -57,6 +64,7 @@ from app.models import (
     Preference,
     SymptomCause,
 )
+from app.schemas import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +107,12 @@ _REPORT_SYSTEM_PROMPT = """你是诊断报告转写器。给你一份结构化�
 - 措辞使用「可能」「建议检查」「建议观察」等非断言表达，
   禁止出现「一定」「必然」「肯定是」「已修复」等过度断言词；
 - 先说结论，再说依据证据，最后说建议，全文 150 字以内。"""
+_CITATION_PROMPT_SUFFIX = """
+
+允许引用的 citation id：{citation_ids}。
+如需引用参考资料，只能使用这些 id 的 [chunk:<id>] 形式；禁止编造、改名或新增
+cause、fix_action、citation。若知识库另有相关原因，只能补充说明，不得改变结论。"""
+_CITATION_PATTERN = re.compile(r"\[\s*(?:citation:|chunk:)\s*(\d+)\s*\]")
 
 
 class DiagnoseState(TypedDict):
@@ -117,6 +131,8 @@ class DiagnoseState(TypedDict):
     investigation_round: int
     risk_level: str
     scope: dict
+    knowledge_context: list[dict]
+    citations: list[dict]
     final_diagnosis: dict | None
 
 
@@ -382,6 +398,132 @@ def _conclusion_observation(diagnosis: dict) -> dict:
     return {key: diagnosis.get(key) for key in keys}
 
 
+def _knowledge_hit_payloads(
+    result: RetrievalResult,
+) -> tuple[list[dict], list[dict]]:
+    """把 RetrievalHit 转成 JSON 原生状态；citation 与正文绑定。"""
+    citations: list[dict] = []
+    contexts: list[dict] = []
+    for _index, hit in enumerate(result.hits):
+        citation = hit.citation.model_dump(mode="json")
+        citations.append(citation)
+        metadata = dict(hit.metadata)
+        contexts.append(
+            {
+                "citation_id": f"chunk:{citation['chunk_id']}",
+                "source_id": citation["source_id"],
+                "chunk_id": citation["chunk_id"],
+                "source_key": citation["source_key"],
+                "title": citation["title"],
+                "chunk_key": metadata.get("chunk_key", ""),
+                "cause_key": metadata.get("cause_key", ""),
+                "symptom_keys": metadata.get("symptom_keys", []),
+                "chunk_text": hit.chunk_text,
+                "score": citation["score"],
+                "conflict": False,
+            }
+        )
+    return contexts, citations
+
+
+def _mark_knowledge_conflicts(
+    contexts: list[dict], primary_cause_key: str | None
+) -> None:
+    """top1 与确定性结论不同时只标记冲突；不得改变 primary_cause_key。"""
+    if contexts and primary_cause_key:
+        contexts[0]["conflict"] = contexts[0].get("cause_key") != primary_cause_key
+
+
+@observe(name="knowledge-retrieval")
+async def _retrieve_knowledge_context(
+    state: DiagnoseState,
+    *,
+    embedding_backend=None,
+    session_factory=None,
+) -> tuple[list[dict], list[dict], dict]:
+    """确定性拼装查询并三路检索；失败降级为空 citation，不阻断诊断。"""
+    symptom = state.get("symptom") or {}
+    domain = symptom.get("domain", "unknown")
+    evidence = list(state.get("observed_evidence") or [])
+    candidates = list(state.get("candidate_hypotheses") or [])
+    cause_keys: list[str] = [
+        str(item["cause_key"])
+        for item in candidates
+        if item.get("cause_key") is not None
+    ]
+    symptom_keys = list(
+        dict.fromkeys(
+            key
+            for key in (symptom.get("symptom_key"), *evidence)
+            if isinstance(key, str) and key
+        )
+    )
+    human_message = last_human_message(state["messages"])
+    human_text = (
+        human_message.content
+        if human_message and isinstance(human_message.content, str)
+        else ""
+    )
+    query_parts = [
+        human_text,
+        symptom.get("symptom_key") or "",
+        *evidence,
+        *[item.get("cause_name") or "" for item in candidates],
+    ]
+    query = " ".join(
+        part.strip() for part in query_parts if isinstance(part, str) and part.strip()
+    )
+    filters = {
+        "device_type": domain,
+        "knowledge_version": get_settings().knowledge_version,
+        "status": "active",
+        "symptom_keys": symptom_keys,
+        "cause_keys": cause_keys,
+    }
+    try:
+        result, stats = await search_fault_knowledge_detail(
+            query=query,
+            device_type=domain,
+            symptom_keys=symptom_keys,
+            cause_keys=cause_keys,
+            top_k=min(4, get_settings().knowledge_top_k),
+            embedding_backend=embedding_backend,
+            session_factory=session_factory,
+        )
+    except Exception as exc:
+        logger.warning("诊断知识检索失败，citations 保持为空", exc_info=exc)
+        stats = KnowledgeRetrievalStats(
+            query=query, fallbacks=["knowledge_unavailable"]
+        )
+        result = None
+
+    fallbacks = list(stats.fallbacks)
+    if result is None:
+        contexts: list[dict] = []
+        citations: list[dict] = []
+    else:
+        contexts, citations = _knowledge_hit_payloads(result)
+        primary_cause_key = (state.get("final_diagnosis") or {}).get(
+            "primary_cause_key"
+        )
+        _mark_knowledge_conflicts(contexts, primary_cause_key)
+
+    observation = {
+        **filters,
+        "query": query,
+        "structured_hits": stats.structured_hits,
+        "keyword_hits": stats.keyword_hits,
+        "dense_hits": stats.dense_hits,
+        "final_hits": len(citations),
+        "rag_fallback": fallbacks,
+    }
+    get_client().update_current_span(
+        metadata=observation,
+        level="WARNING" if fallbacks else "DEFAULT",
+    )
+    return contexts, citations, observation
+
+
 @observe(name="approval-gate")
 def _approval_observation(
     decision_info, decision: str, execution_result: str | None
@@ -405,10 +547,30 @@ def _approval_observation(
     }
 
 
+def _citation_reference_line(citations: list[dict]) -> str:
+    """确定性渲染引用；LLM 不参与选择 citation 或编写 score / version。"""
+    if not citations:
+        return ""
+    references = "；".join(
+        f"{citation['source_key']} #{citation['chunk_id']}"
+        f"（score={citation['score']:.2f}，version={citation['knowledge_version']}）"
+        for citation in citations
+    )
+    return f"参考资料来源：{references}。"
+
+
+def _validate_report_citations(text: str, citations: list[dict]) -> bool:
+    """LLM 引用 id 必须是检索 citations 子集；越权引用回退模板。"""
+    allowed = {str(citation["chunk_id"]) for citation in citations}
+    cited = set(_CITATION_PATTERN.findall(text))
+    return cited.issubset(allowed)
+
+
 @observe(name="report-fallback")
 def _rule_template_report(diagnosis: dict) -> str:
     """LLM 失败或越权时的规则模板报告（fallback 事件进 trace）。"""
     get_client().update_current_span(metadata={"report_fallback": True})
+    citation_text = _citation_reference_line(diagnosis.get("citations") or [])
     if diagnosis["status"] == "concluded":
         alternative_names = "；".join(
             alternative["cause_name"] for alternative in diagnosis["alternatives"]
@@ -419,6 +581,7 @@ def _rule_template_report(diagnosis: dict) -> str:
         return (
             f"根据排查，你描述的问题可能由{diagnosis['primary_cause_name']}导致，"
             f"建议：{diagnosis['fix_suggestion']}{alternative_text}"
+            f"{citation_text}"
         )
     # unresolved 两种子情况：有 top 假设（低置信建议）与完全无头绪。
     if diagnosis["primary_cause_name"]:
@@ -426,10 +589,12 @@ def _rule_template_report(diagnosis: dict) -> str:
             f"经过 {diagnosis['investigation_rounds']} 轮排查暂未能确定具体原因，"
             f"最可能的原因为「{diagnosis['primary_cause_name']}」（低置信度），"
             f"建议：{diagnosis['fix_suggestion']} 如仍无法解决，请人工介入进一步检查。"
+            f"{citation_text}"
         )
     return (
         f"经过 {diagnosis['investigation_rounds']} 轮排查未能识别设备或症状，"
         "建议人工介入进一步检查。"
+        f"{citation_text}"
     )
 
 
@@ -504,6 +669,7 @@ def build_diagnose_graph(
     investigator=None,
     executor=None,
     checkpointer=None,
+    embedding_backend=None,
 ):
     """构建诊断子图；chat_model / investigator / executor 供测试注入桩实现。
 
@@ -514,6 +680,8 @@ def build_diagnose_graph(
     """
     investigator = investigator or default_investigator
     executor = executor or default_executor
+    if embedding_backend is None and get_settings().embedding_enabled:
+        embedding_backend = OpenAIEmbeddingBackend(get_settings())
 
     async def extract_symptom(state: DiagnoseState, config: RunnableConfig) -> dict:
         """抽取症状槽位并用知识库验证；失败统一落回通用兜底症状。"""
@@ -663,6 +831,22 @@ def build_diagnose_graph(
         _conclusion_observation(diagnosis)
         return {"final_diagnosis": diagnosis}
 
+    async def _retrieve_knowledge(state: DiagnoseState, config) -> dict:
+        """在结论后、审批前补充 RAG 上下文；不参与确定性结论计算。"""
+        contexts, citations, _stats = await _retrieve_knowledge_context(
+            state,
+            embedding_backend=embedding_backend,
+            session_factory=session_factory,
+        )
+        diagnosis = dict(state.get("final_diagnosis") or {})
+        diagnosis["citations"] = citations
+        diagnosis["knowledge_conflict"] = bool(contexts and contexts[0].get("conflict"))
+        return {
+            "knowledge_context": contexts,
+            "citations": citations,
+            "final_diagnosis": diagnosis,
+        }
+
     async def _approval_gate(state: DiagnoseState, config) -> dict:
         """确定性审批门控：无动作放行；越界阻断；高风险 interrupt 等审批。
 
@@ -774,6 +958,7 @@ def build_diagnose_graph(
         diagnosis = dict(state.get("final_diagnosis") or {})
         candidate_hypotheses = state.get("candidate_hypotheses") or []
         symptom = state.get("symptom") or {}
+        citations = state.get("citations") or []
         approval = diagnosis.get("approval") or {}
         decision = approval.get("decision", "auto")
         if decision == "rejected":
@@ -793,13 +978,17 @@ def build_diagnose_graph(
             diagnosis["report"] = text
             return {"final_diagnosis": diagnosis, "messages": [AIMessage(content=text)]}
         payload = json.dumps(diagnosis, ensure_ascii=False)
+        citation_ids = [f"chunk:{citation['chunk_id']}" for citation in citations]
+        prompt = payload + _CITATION_PROMPT_SUFFIX.format(
+            citation_ids=", ".join(citation_ids) or "无"
+        )
         try:
             model = chat_model or build_chat_model()
             report = await _invoke_report(
                 model,
                 [
                     SystemMessage(content=_REPORT_SYSTEM_PROMPT),
-                    HumanMessage(content=payload),
+                    HumanMessage(content=prompt),
                 ],
                 config=config,
             )
@@ -811,9 +1000,10 @@ def build_diagnose_graph(
         if (
             not isinstance(report, DiagnosisReport)
             or report.primary_cause_key != diagnosis["primary_cause_key"]
+            or not _validate_report_citations(report.report, citations)
         ):
             if report is not None:
-                logger.warning("诊断报告越权或结论不一致，已回退规则模板")
+                logger.warning("诊断报告越权、结论不一致或引用越权，已回退规则模板")
             report = None
         text = (
             _apply_wording_filter(report.report)
@@ -824,6 +1014,9 @@ def build_diagnose_graph(
             # LLM「成功」返回空串也兜底：报告对用户必须非空（空气泡事故）。
             logger.warning("诊断报告转写为空，回退规则模板")
             text = _apply_wording_filter(_rule_template_report(diagnosis))
+        citation_text = _citation_reference_line(citations)
+        if citation_text and citation_text.strip() not in text:
+            text = f"{text}{citation_text}"
         if decision == "approved":
             text = f"{text}\n操作已执行：{diagnosis.get('execution_result', '')}"
         elif decision == "blocked":
@@ -837,6 +1030,7 @@ def build_diagnose_graph(
     builder.add_node("compute_hypotheses", _compute_candidates)
     builder.add_node("investigate", _investigate_round)
     builder.add_node("conclude", _conclude)
+    builder.add_node("retrieve_knowledge", _retrieve_knowledge)
     builder.add_node("approval_gate", _approval_gate)
     builder.add_node("report", _report)
     builder.add_edge(START, "extract_symptom")
@@ -847,7 +1041,8 @@ def build_diagnose_graph(
     builder.add_conditional_edges(
         "investigate", _after_investigate, ["investigate", "conclude"]
     )
-    builder.add_edge("conclude", "approval_gate")
+    builder.add_edge("conclude", "retrieve_knowledge")
+    builder.add_edge("retrieve_knowledge", "approval_gate")
     builder.add_edge("approval_gate", "report")
     builder.add_edge("report", END)
     return builder.compile(checkpointer=checkpointer)

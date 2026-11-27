@@ -465,7 +465,8 @@ def test_report_transwrites_and_filters_assertions(client, home_id):
     diagnosis = result["final_diagnosis"]
     assert diagnosis["status"] == "concluded"
     # check_power 为低风险 → auto 放行，报告不追加执行说明。
-    assert diagnosis["report"] == "可能是停电了，建议检查。"
+    assert diagnosis["report"].startswith("可能是停电了，建议检查。")
+    assert "参考资料来源：lighting_knowledge #" in diagnosis["report"]
     # 报告文本追加为 AI 消息，挂进主图后由 to_answer 提取返回。
     assert result["messages"][-1].content == diagnosis["report"]
     assert executor_calls == []
@@ -569,3 +570,94 @@ def test_report_falls_back_when_llm_returns_blank_text(client, home_id):
     report = result["final_diagnosis"]["report"]
     assert report.strip()
     assert "区域停电" in report
+
+
+def test_diagnose_retrieves_knowledge_and_renders_citations(client, home_id):
+    """RAG 只补充证据与引用；确定性 primary_cause_key 不被检索改变。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
+        report=DiagnosisReport(
+            report="可能是停电了，建议检查。", primary_cause_key="power_outage"
+        ),
+    )
+    investigator = _scripted_investigator({"device_status": ["light_offline"]})
+
+    result = _run_extract(
+        home_id,
+        "客厅灯不亮了",
+        model,
+        investigator,
+        executor=_stub_executor([]),
+    )
+
+    contexts = result["knowledge_context"]
+    citations = result["citations"]
+    assert len(contexts) <= 4
+    assert len(citations) <= 4
+    assert contexts
+    assert citations
+    assert all(citation["device_type"] == "light" for citation in citations)
+    assert all(context["source_key"] == "lighting_knowledge" for context in contexts)
+    assert all(context["chunk_text"] for context in contexts)
+    assert result["final_diagnosis"]["citations"] == citations
+    assert result["final_diagnosis"]["primary_cause_key"] == "power_outage"
+    assert "参考资料来源：lighting_knowledge #" in result["final_diagnosis"]["report"]
+    assert "version=2026.11-seed-v1" in result["final_diagnosis"]["report"]
+    assert model.report_prompts
+    assert "允许引用的 citation id" in str(model.report_prompts[0])
+
+
+def test_diagnose_rejects_report_with_unauthorized_citation(client, home_id):
+    """LLM 引用未检索到的 chunk id 时，整份转写回退确定性模板。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
+        report=DiagnosisReport(
+            report="可能是停电了，建议检查。[chunk:999999]",
+            primary_cause_key="power_outage",
+        ),
+    )
+    investigator = _scripted_investigator({"device_status": ["light_offline"]})
+
+    result = _run_extract(
+        home_id,
+        "客厅灯不亮了",
+        model,
+        investigator,
+        executor=_stub_executor([]),
+    )
+
+    report = result["final_diagnosis"]["report"]
+    assert "[chunk:999999]" not in report
+    assert "外星人" not in report
+    if result["citations"]:
+        assert "参考资料来源：" in report
+
+
+def test_diagnose_knowledge_top1_conflict_does_not_change_conclusion(client, home_id):
+    """top1 knowledge cause 与确定性结论不同时，只允许标记 conflict。"""
+    _create_device(client, home_id, "客厅灯", "light")
+    model = StubDiagnosisModel(
+        slots=SymptomSlots(device_name="客厅灯", symptom_key="light_not_on"),
+        report=DiagnosisReport(
+            report="可能是停电了，建议检查。", primary_cause_key="power_outage"
+        ),
+    )
+    investigator = _scripted_investigator({"device_status": ["light_offline"]})
+
+    result = _run_extract(
+        home_id,
+        "客厅灯不亮了",
+        model,
+        investigator,
+        executor=_stub_executor([]),
+    )
+
+    contexts = result["knowledge_context"]
+    diagnosis = result["final_diagnosis"]
+    assert diagnosis["primary_cause_key"] == "power_outage"
+    assert contexts
+    assert diagnosis["knowledge_conflict"] == (
+        contexts[0]["cause_key"] != diagnosis["primary_cause_key"]
+    )
